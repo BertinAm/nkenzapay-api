@@ -65,6 +65,11 @@ MIDDLEWARE = [
     # Blocks refused addresses and records probes before anything else spends
     # work on the request.
     "nkenzapay.security.middleware.SecurityMiddleware",
+    # Serves /static/ from STATIC_ROOT. Under Passenger every request reaches
+    # Django, so without this the Django admin and the browsable API load
+    # without any of their CSS. Placed after the blocklist so a refused address
+    # gets nothing at all.
+    "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
@@ -152,7 +157,19 @@ USE_TZ = True
 
 STATIC_URL = "static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
-MEDIA_ROOT = BASE_DIR / "private-media"
+STORAGES = {
+    "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
+    # Compressed, but not hashed. The manifest backend refuses to serve a file
+    # missing from the manifest, which turns a forgotten collectstatic into a
+    # 500 rather than a missing stylesheet.
+    "staticfiles": {"BACKEND": "whitenoise.storage.CompressedStaticFilesStorage"},
+}
+# Where uploaded files land. Deliberately settable, because on cPanel the
+# application directory *is* the document root, so the default below would sit
+# one web-server misconfiguration away from being public. Point it at a sibling
+# of the application directory in production. `manage.py check --deploy` fails
+# if the path looks web-served.
+MEDIA_ROOT = env("MEDIA_ROOT", default=str(BASE_DIR / "private-media"))
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 REST_FRAMEWORK = {

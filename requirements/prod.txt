@@ -1,8 +1,22 @@
 -r base.txt
 
-psycopg[binary]==3.2.3
-channels-redis==4.2.1
-boto3==1.35.81
-django-storages==1.14.4
-gunicorn==23.0.0
+# Database driver.
+#
+# PyMySQL is pure Python and installs on shared hosting without a compiler.
+# mysqlclient is faster but needs gcc and mysql_config, which a cPanel account
+# usually does not have, and the failure comes out as a wall of compiler errors
+# rather than anything readable. config/__init__.py registers PyMySQL under the
+# name Django looks for, so nothing else has to know which one is present.
+PyMySQL==1.1.1
+
+# Error tracking. Wire the DSN in .env.
 sentry-sdk==2.19.2
+
+# Only install these where the infrastructure they need exists. Each one is a
+# large download, and shared hosting counts every file against an inode quota.
+#
+# psycopg[binary]==3.2.3     PostgreSQL instead of MySQL
+# channels-redis==4.2.1      websockets, needs Redis and a long-lived process
+# boto3==1.35.81             MEDIA_STORAGE=s3
+# django-storages==1.14.4    MEDIA_STORAGE=s3
+# gunicorn==23.0.0           not used under Passenger
