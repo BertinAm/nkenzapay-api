@@ -1,0 +1,61 @@
+# This repository is public, because Namecheap's cPanel Python apps deploy from
+# one. Everything that must not be public is listed here. Read before adding a
+# file: if it names an account, a key, a host or a customer, it does not belong.
+
+# Secrets. .env.example is committed and carries no values.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+credentials.json
+service-account*.json
+
+# Operational documents. These describe the live deployment — hostnames, paths,
+# cron entries, and the list of things not yet hardened. A public copy is a map
+# for anyone who wants one.
+DEPLOYMENT.md
+SECURITY-NOTES.md
+INTERNAL*.md
+RUNBOOK*.md
+docs/internal/
+
+# Data. Customer records, payment evidence, photographs of people's faces.
+db.sqlite3
+db.sqlite3-*
+*.sqlite3
+private-media/
+media/
+backups/
+*.sql
+*.dump
+
+# Generated
+__pycache__/
+*.py[cod]
+*.so
+.Python
+staticfiles/
+.pytest_cache/
+.coverage
+htmlcov/
+.ruff_cache/
+*.log
+
+# Environments
+.venv/
+venv/
+env/
+
+# Passenger writes here at runtime
+tmp/
+
+# Editors and operating systems
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.idea/
+.vscode/
