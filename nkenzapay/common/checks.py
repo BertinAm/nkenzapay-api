@@ -86,6 +86,39 @@ def check_media_root_is_not_web_served(app_configs, **kwargs):
 
 
 @register("nkenzapay", deploy=True)
+def check_media_root_is_outside_the_app(app_configs, **kwargs):
+    """On cPanel the application root is usually the document root too.
+
+    Which means the default MEDIA_ROOT, a directory inside the project, sits
+    under the web root without any of the giveaway names the check above looks
+    for. The .htaccess written into it denies everything, and Passenger hands
+    most requests to Django rather than serving files, so this is a warning
+    rather than an error. It is still the wrong place to put photographs of
+    customers' faces when moving it costs one environment variable.
+    """
+    from django.conf import settings as django_settings
+
+    root = Path(django_settings.MEDIA_ROOT).resolve()
+    base = Path(django_settings.BASE_DIR).resolve()
+
+    if not root.is_relative_to(base):
+        return []
+
+    return [
+        Warning(
+            "MEDIA_ROOT is inside the application directory.",
+            hint=(
+                f"{root} sits under {base}, which on cPanel is also the "
+                "document root. Set MEDIA_ROOT to a directory beside the "
+                "application rather than inside it, for example "
+                "/home/USER/nkenzapay-media, and move what is already there."
+            ),
+            id="nkenzapay.W010",
+        )
+    ]
+
+
+@register("nkenzapay", deploy=True)
 def check_the_cache_works(app_configs, **kwargs):
     """A cache that raises turns rate limiting into a 500 on every request.
 
