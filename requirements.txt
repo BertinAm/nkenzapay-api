@@ -1,0 +1,6 @@
+# cPanel's "Setup Python App" screen looks for a requirements file, and some
+# builds of it only reliably accept one named requirements.txt in the
+# application root. This is that file. The real lists live in requirements/.
+#
+# Local development wants requirements/dev.txt instead.
+-r requirements/prod.txt
