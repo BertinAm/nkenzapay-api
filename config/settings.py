@@ -88,6 +88,18 @@ MIDDLEWARE = [
 # list empty so REMOTE_ADDR is used.
 TRUSTED_IP_HEADERS = env.list("TRUSTED_IP_HEADERS", default=[])
 
+# The front end proxies /api to this service, so behind Cloudflare the caller
+# of record is the Worker and CF-Connecting-IP holds the Worker's address, not
+# the customer's. Every visitor would then share one bucket: one attacker's
+# failed logins would rate-limit everybody, and an automatic block would take
+# the whole site off the air.
+#
+# The Worker therefore forwards the real address in X-Client-IP, and proves it
+# is the Worker with this shared secret. Without the proof the header is
+# ignored, because anything a client can set is something a client can forge.
+# Empty means no proxy: the header is never believed.
+PROXY_SHARED_SECRET = env("PROXY_SHARED_SECRET", default="")
+
 # How many hostile events from one address before it is refused, as a JSON
 # object of {event kind: hits}. The defaults live in the code and are therefore
 # public; set this to numbers of your own so an attacker reading the source

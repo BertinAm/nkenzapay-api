@@ -193,6 +193,50 @@ def check_the_client_address_is_knowable(app_configs, **kwargs):
 
 
 @register("nkenzapay", deploy=True)
+def check_proxy_secret_is_usable(app_configs, **kwargs):
+    """The shared secret that lets the front end vouch for a caller's address.
+
+    Only meaningful when the front end proxies /api here. When it does and this
+    is unset, every visitor arrives as the proxy: rate limits are pooled across
+    all of them at once, and an automatic block takes the whole site off the
+    air rather than one attacker.
+    """
+    secret = getattr(settings, "PROXY_SHARED_SECRET", "")
+    if not secret:
+        return []
+
+    problems = []
+
+    if len(secret) < 32:
+        problems.append(
+            Error(
+                "PROXY_SHARED_SECRET is shorter than 32 characters.",
+                hint=(
+                    "It is the only thing separating a forged X-Client-IP from "
+                    "a real one, and a forged one lifts a block. Generate it "
+                    "with 'manage.py generate_secret_key'."
+                ),
+                id="nkenzapay.E011",
+            )
+        )
+
+    if secret == settings.SECRET_KEY:
+        problems.append(
+            Error(
+                "PROXY_SHARED_SECRET is the same value as SECRET_KEY.",
+                hint=(
+                    "This one is handed to the front end, which puts a key that "
+                    "signs sessions into a second system. Generate a separate "
+                    "value."
+                ),
+                id="nkenzapay.E012",
+            )
+        )
+
+    return problems
+
+
+@register("nkenzapay", deploy=True)
 def check_secrets_are_real(app_configs, **kwargs):
     problems = []
 

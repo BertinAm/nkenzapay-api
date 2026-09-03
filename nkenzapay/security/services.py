@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import ipaddress
 import logging
+import secrets
 from datetime import timedelta
 
 from django.conf import settings
@@ -105,12 +106,23 @@ def is_infrastructure(ip) -> bool:
 def client_ip(request) -> str | None:
     """The caller's address, trusting only the proxy we actually run behind.
 
-    Behind Cloudflare, CF-Connecting-IP is the one header a client cannot
-    forge. X-Forwarded-For can be, so its leftmost value is only used when no
-    trusted header is present and it is explicitly enabled.
+    Three cases, in order of how much the header can be believed.
+
+    The front end proxies /api here, so on that hop the caller is the Worker
+    and CF-Connecting-IP holds the Worker's address. The Worker forwards the
+    real one in X-Client-IP alongside a shared secret; the address is read only
+    when that secret matches, because a header anybody can set is a header
+    anybody can forge — and forging it walks straight past a block.
+
+    Failing that, TRUSTED_IP_HEADERS names a header the proxy in front of us
+    always overwrites. Failing that, the socket.
     """
     if request is None:
         return None
+
+    forwarded = _forwarded_client_ip(request)
+    if forwarded:
+        return forwarded
 
     for header in settings.TRUSTED_IP_HEADERS:
         value = request.META.get(header)
@@ -118,6 +130,24 @@ def client_ip(request) -> str | None:
             return value.split(",")[0].strip()
 
     return request.META.get("REMOTE_ADDR")
+
+
+def _forwarded_client_ip(request) -> str | None:
+    """The address the front-end proxy vouched for, or None.
+
+    Compared in constant time. A secret checked with == leaks its length and
+    its leading bytes to anyone who can measure the difference, and this one
+    is the only thing standing between a forged header and a lifted block.
+    """
+    secret = settings.PROXY_SHARED_SECRET
+    if not secret:
+        return None
+
+    presented = request.META.get("HTTP_X_PROXY_TOKEN", "")
+    if not presented or not secrets.compare_digest(presented, secret):
+        return None
+
+    return (request.META.get("HTTP_X_CLIENT_IP") or "").split(",")[0].strip() or None
 
 
 def record(

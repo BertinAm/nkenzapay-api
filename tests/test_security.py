@@ -272,6 +272,65 @@ def test_a_forged_forwarding_header_cannot_change_the_address(api, seeded, setti
     assert response.status_code == 403
 
 
+def test_the_proxy_can_vouch_for_a_callers_address(api, seeded, settings):
+    """The front end proxies /api to this service, so without a way to pass the
+    real address through, every customer arrives as the Worker and shares one
+    rate limit."""
+    settings.PROXY_SHARED_SECRET = "a" * 40
+    settings.TRUSTED_IP_HEADERS = ["HTTP_CF_CONNECTING_IP"]
+    services.block("45.155.205.13", reason="testing")
+
+    response = api.get(
+        "/api/v1/geo/countries",
+        # Cloudflare sees the Worker on this hop, not the customer.
+        HTTP_CF_CONNECTING_IP="2a06:98c0:3600::103",
+        HTTP_X_CLIENT_IP="45.155.205.13",
+        HTTP_X_PROXY_TOKEN="a" * 40,
+    )
+    assert response.status_code == 403
+
+
+def test_a_forged_client_ip_header_is_ignored_without_the_secret(api, seeded, settings):
+    """The whole point of the token. Anyone can set X-Client-IP by hand, and if
+    that were enough, a blocked address would only have to claim to be another
+    one to be let back in."""
+    settings.PROXY_SHARED_SECRET = "a" * 40
+    settings.TRUSTED_IP_HEADERS = ["HTTP_CF_CONNECTING_IP"]
+    services.block("45.155.205.14", reason="testing")
+
+    blocked = api.get(
+        "/api/v1/geo/countries",
+        HTTP_CF_CONNECTING_IP="45.155.205.14",
+        HTTP_X_CLIENT_IP="8.8.8.8",
+        HTTP_X_PROXY_TOKEN="not-the-secret",
+    )
+    assert blocked.status_code == 403
+
+    # And the same request with no token at all.
+    still_blocked = api.get(
+        "/api/v1/geo/countries",
+        HTTP_CF_CONNECTING_IP="45.155.205.14",
+        HTTP_X_CLIENT_IP="8.8.8.8",
+    )
+    assert still_blocked.status_code == 403
+
+
+def test_the_client_ip_header_is_dead_until_a_secret_is_configured(api, seeded, settings):
+    """An installation with no proxy in front of it must not honour the header
+    at all, or it has handed every caller a way to pick their own address."""
+    settings.PROXY_SHARED_SECRET = ""
+    settings.TRUSTED_IP_HEADERS = ["HTTP_CF_CONNECTING_IP"]
+    services.block("45.155.205.15", reason="testing")
+
+    response = api.get(
+        "/api/v1/geo/countries",
+        HTTP_CF_CONNECTING_IP="45.155.205.15",
+        HTTP_X_CLIENT_IP="8.8.8.8",
+        HTTP_X_PROXY_TOKEN="",
+    )
+    assert response.status_code == 403
+
+
 # --- failed sign-ins ------------------------------------------------------
 
 
