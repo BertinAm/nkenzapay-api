@@ -29,6 +29,7 @@ from nkenzapay.rates.models import RateProvider, RateSnapshot
 from nkenzapay.transactions import services as txn_services
 from nkenzapay.transactions.models import (
     CLOSED_STATUSES,
+    Attachment,
     Message,
     Status,
     StatusHistory,
@@ -113,6 +114,12 @@ class Overview(APIView):
                 "processed_today_inr": money(processed["inr"] or 0, "INR"),
                 "processed_today_xaf": money(processed["xaf"] or 0, "XAF"),
                 "fees_today": money(processed["fees"] or 0, "INR"),
+                # What the desk has actually been handed today, which is not
+                # the same as transfers created: a customer can open one and
+                # not pay for hours.
+                "proofs_today": Attachment.objects.filter(
+                    is_payment_proof=True, created_at__date=timezone.now().date()
+                ).count(),
                 "waiting_on_desk": Transaction.objects.needs_desk().count(),
                 "open_disputes": Dispute.objects.filter(state=Dispute.OPEN).count(),
             },
@@ -1083,8 +1090,40 @@ class AdminNotifications(generics.ListAPIView):
         return NotificationSerializer
 
     def get_queryset(self):
-        return Notification.objects.filter(user=self.request.user,
+        queryset = Notification.objects.filter(user=self.request.user,
+                                               audience=Notification.ADMIN)
+        wanted = self.request.query_params.get("category")
+        if wanted == "action":
+            queryset = queryset.exclude(action="")
+        elif wanted == "messages":
+            queryset = queryset.filter(event__contains="message")
+        elif wanted == "disputes":
+            queryset = queryset.filter(event__contains="dispute")
+        elif wanted == "system":
+            queryset = queryset.filter(
+                Q(event__contains="new_device") | Q(event__contains="system")
+                | Q(event__contains="rate")
+            )
+        return queryset
+
+    def list(self, request, *args, **kwargs):
+        response = super().list(request, *args, **kwargs)
+        rows = Notification.objects.filter(user=request.user,
                                            audience=Notification.ADMIN)
+        # Counted the same way the filters above select, so a tab's number and
+        # its contents cannot disagree.
+        response.data["counts"] = {
+            "all": rows.count(),
+            "action": rows.exclude(action="").count(),
+            "messages": rows.filter(event__contains="message").count(),
+            "disputes": rows.filter(event__contains="dispute").count(),
+            "system": rows.filter(
+                Q(event__contains="new_device") | Q(event__contains="system")
+                | Q(event__contains="rate")
+            ).count(),
+        }
+        response.data["unread"] = rows.filter(read_at__isnull=True).count()
+        return response
 
 
 class AdminDeliveryRules(APIView):
@@ -1176,6 +1215,16 @@ class Analytics(APIView):
             "top_pages": top_pages,
             "sources": sources,
             "devices": devices,
+            # Daily visits, so the screen can plot them beside signups. Counted
+            # as distinct sessions rather than page views: one person reading
+            # six pages is one visit, and the chart is about people.
+            "series": [
+                {"day": row["day"].isoformat(), "count": row["count"]}
+                for row in views.annotate(day=TruncDate("at"))
+                .values("day")
+                .annotate(count=Count("session_key", distinct=True))
+                .order_by("day")
+            ],
         }
 
     def users(self, since, until):
@@ -1210,22 +1259,33 @@ class Analytics(APIView):
         }
 
     def financial(self, since, until):
+        """Money, formatted here like everywhere else.
+
+        Each side is reported in its own currency and the two are never added
+        together. An average across both would be a number in no currency at
+        all, so it is reported per side as well.
+        """
         rows = Transaction.objects.filter(created_at__range=(since, until))
+        xaf = rows.filter(send_currency="XAF")
+        inr = rows.filter(send_currency="INR")
         return {
-            "xaf_processed": str(rows.filter(send_currency="XAF").aggregate(
-                t=Sum("send_amount"))["t"] or 0),
-            "inr_processed": str(rows.filter(send_currency="INR").aggregate(
-                t=Sum("send_amount"))["t"] or 0),
-            "fees": str(rows.aggregate(t=Sum("fee_amount"))["t"] or 0),
-            "average_transfer": str(rows.aggregate(v=Avg("send_amount"))["v"] or 0),
-            "by_method": list(
-                rows.values("collect_method__label").annotate(
+            "xaf_processed": money(
+                xaf.aggregate(t=Sum("send_amount"))["t"] or 0, "XAF"),
+            "inr_processed": money(
+                inr.aggregate(t=Sum("send_amount"))["t"] or 0, "INR"),
+            "fees": money(rows.aggregate(t=Sum("fee_amount"))["t"] or 0, "INR"),
+            "average_xaf": money(xaf.aggregate(v=Avg("send_amount"))["v"] or 0, "XAF"),
+            "average_inr": money(inr.aggregate(v=Avg("send_amount"))["v"] or 0, "INR"),
+            "by_method": [
+                {**row, "volume": str(row["volume"] or 0)}
+                for row in rows.values("collect_method__label").annotate(
                     count=Count("id"), volume=Sum("send_amount")).order_by("-count")
-            ),
-            "by_country": list(
-                rows.values("corridor__source__name").annotate(
+            ],
+            "by_country": [
+                {**row, "volume": str(row["volume"] or 0)}
+                for row in rows.values("corridor__source__name").annotate(
                     count=Count("id"), volume=Sum("send_amount")).order_by("-count")
-            ),
+            ],
         }
 
 

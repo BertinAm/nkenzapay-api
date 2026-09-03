@@ -36,13 +36,24 @@ class Notification(models.Model):
 
     @property
     def category(self):
-        if self.event.startswith("message"):
+        """Which tab this belongs under.
+
+        Desk events are named admin.<what happened>, and what files them is
+        what happened rather than who it reached — so the prefix comes off
+        first. Without that every desk notification lands in "system" and the
+        desk's tabs all show the same list.
+        """
+        event = self.event
+        if event.startswith("admin."):
+            event = event.split(".", 1)[1]
+
+        if event.startswith("message"):
             return "messages"
-        if self.event.startswith(("news", "promo")):
+        if event.startswith(("news", "promo")):
             return "company"
-        if self.event.startswith("dispute"):
+        if event.startswith("dispute"):
             return "disputes"
-        if self.event.startswith(("admin", "system", "rate")):
+        if event.startswith(("admin", "system", "rate", "new_device", "login")):
             return "system"
         return "transfers"
 

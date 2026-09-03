@@ -82,6 +82,18 @@ class AdminNewsSerializer(serializers.ModelSerializer):
 
 
 class LegalDocumentSerializer(serializers.ModelSerializer):
+    body_html = serializers.SerializerMethodField()
+
     class Meta:
         model = LegalDocument
         fields = ["slug", "title", "body_html", "effective_from", "updated_at"]
+
+    def get_body_html(self, obj):
+        """Sanitised on the way out, as news bodies are.
+
+        These are edited through the Django admin rather than the desk, so the
+        row is only as trustworthy as that account — and the page renders it as
+        HTML. Cleaning it here costs nothing and closes the gap that news had
+        already closed twice over.
+        """
+        return sanitise(obj.body_html)
