@@ -21,9 +21,18 @@ def record(*, actor, action, summary, target=None, before=None, after=None, requ
 
 
 def client_ip(request):
-    if request is None:
-        return None
-    forwarded = request.META.get("HTTP_X_FORWARDED_FOR", "")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-    return request.META.get("REMOTE_ADDR")
+    """The caller's address, resolved the same way the security log resolves it.
+
+    This used to read X-Forwarded-For directly. Behind Cloudflare that is
+    forgeable: Cloudflare appends the real address to whatever the client sent,
+    so the leftmost value — the one this returned — was attacker-controlled.
+    Every audit row could be stamped with an address of the caller's choosing.
+
+    TRUSTED_IP_HEADERS names the one header the proxy in front of us always
+    overwrites, and nothing else is believed.
+    """
+    # Imported here rather than at module scope: security.views imports this
+    # module, and a top-level import would close the loop.
+    from nkenzapay.security.services import client_ip as trusted_client_ip
+
+    return trusted_client_ip(request)
