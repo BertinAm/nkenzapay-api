@@ -121,11 +121,17 @@ class CustomerListSerializer(serializers.ModelSerializer):
     initials = serializers.CharField(read_only=True)
     whatsapp = serializers.SerializerMethodField()
     transfer_count = serializers.IntegerField(read_only=True, default=0)
+    # Not a third kind of account, just a customer with something open and
+    # already flagged. The desk sorts by it; nothing is withheld because of it.
+    needs_review = serializers.SerializerMethodField()
 
     class Meta:
         model = User
         fields = ["id", "name", "initials", "email", "whatsapp", "transfer_count",
-                  "date_joined", "is_suspended", "last_seen_at"]
+                  "date_joined", "is_suspended", "last_seen_at", "needs_review"]
+
+    def get_needs_review(self, obj):
+        return bool(getattr(obj, "review_count", 0))
 
     def get_whatsapp(self, obj):
         profile = getattr(obj, "profile", None)

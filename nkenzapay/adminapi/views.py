@@ -28,6 +28,7 @@ from nkenzapay.pricing.models import FeeRule, PlatformSetting, TransferLimit
 from nkenzapay.rates.models import RateProvider, RateSnapshot
 from nkenzapay.transactions import services as txn_services
 from nkenzapay.transactions.models import (
+    CLOSED_STATUSES,
     Message,
     Status,
     StatusHistory,
@@ -509,7 +510,16 @@ class AdminUserList(generics.ListAPIView):
 
     def get_queryset(self):
         queryset = User.objects.select_related("profile").annotate(
-            transfer_count=Count("transactions")
+            transfer_count=Count("transactions", distinct=True),
+            # A customer the desk should look at before their next transfer:
+            # something of theirs is open and already flagged for review.
+            # distinct on both, or one join counts the other's rows.
+            review_count=Count(
+                "transactions",
+                filter=Q(transactions__needs_manual_review=True)
+                & ~Q(transactions__status__in=CLOSED_STATUSES),
+                distinct=True,
+            ),
         )
         search = self.request.query_params.get("q")
         if search:
