@@ -4,6 +4,7 @@ from . import views
 
 urlpatterns = [
     path("overview", views.Overview.as_view()),
+    path("badges", views.Badges.as_view()),
 
     path("transactions", views.AdminTransactionList.as_view()),
     path("transactions/<str:reference>", views.AdminTransactionDetail.as_view()),

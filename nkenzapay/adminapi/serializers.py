@@ -7,6 +7,48 @@ from nkenzapay.common.money import display_amount
 from nkenzapay.disputes.models import Dispute
 from nkenzapay.pricing.models import FeeRule, TransferLimit
 from nkenzapay.rates.models import RateProvider
+from nkenzapay.transactions.serializers import TransactionListSerializer
+
+
+class AdminTransactionListSerializer(TransactionListSerializer):
+    """The desk's table, which needs a name against every row.
+
+    A customer's own list carries no name because they know who they are. The
+    desk is looking at everybody's.
+    """
+
+    customer = serializers.CharField(source="user.display_name", read_only=True)
+    initials = serializers.CharField(source="user.initials", read_only=True)
+    waiting_minutes = serializers.SerializerMethodField()
+
+    class Meta(TransactionListSerializer.Meta):
+        fields = TransactionListSerializer.Meta.fields + [
+            "customer", "initials", "waiting_minutes",
+        ]
+
+    def get_waiting_minutes(self, obj):
+        """How long this row has been sitting on the desk.
+
+        Null unless the desk is what it is waiting for: a completed transfer
+        has not been waiting for anybody, and a number there would read as an
+        SLA breach that never happened.
+
+        Reads the `status_since` annotation where the queryset supplies one and
+        falls back to the last status change, so the value is right whether the
+        serializer is handed an annotated list or a plain one.
+        """
+        from django.utils import timezone
+
+        from nkenzapay.transactions.models import Status
+
+        if obj.status not in (Status.PROOF_SUBMITTED, Status.PAYMENT_VERIFICATION):
+            return None
+
+        since = getattr(obj, "status_since", None)
+        if since is None:
+            last = obj.history.all().last()
+            since = last.at if last else obj.created_at
+        return int((timezone.now() - since).total_seconds() // 60)
 
 
 class RateProviderSerializer(serializers.ModelSerializer):

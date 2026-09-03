@@ -1,6 +1,7 @@
 from datetime import timedelta
+from decimal import Decimal
 
-from django.db.models import Avg, Count, Q, Sum
+from django.db.models import Avg, Count, OuterRef, Q, Subquery, Sum
 from django.db.models.functions import TruncDate
 from django.utils import timezone
 from rest_framework import generics, status
@@ -20,20 +21,27 @@ from nkenzapay.disputes.models import Dispute
 from nkenzapay.geo.models import Corridor, Country
 from nkenzapay.geo.serializers import CorridorSerializer, CountrySerializer
 from nkenzapay.notifications.models import DeliveryRule, Notification
+from nkenzapay.security.models import SecurityEvent, Severity
 from nkenzapay.payments.models import PaymentInstruction, PaymentMethod
 from nkenzapay.payments.serializers import AdminPaymentMethodSerializer
 from nkenzapay.pricing.models import FeeRule, PlatformSetting, TransferLimit
 from nkenzapay.rates.models import RateProvider, RateSnapshot
 from nkenzapay.transactions import services as txn_services
-from nkenzapay.transactions.models import Message, Status, Transaction
+from nkenzapay.transactions.models import (
+    Message,
+    Status,
+    StatusHistory,
+    Transaction,
+)
 from nkenzapay.transactions.serializers import (
     MessageSerializer,
     TransactionDetailSerializer,
-    TransactionListSerializer,
+    money,
 )
 
 from .permissions import CanChat, CanMoveMoney, CanWriteSettings, IsDesk
 from .serializers import (
+    AdminTransactionListSerializer,
     AdminUserSerializer,
     AuditEntrySerializer,
     CustomerDetailSerializer,
@@ -78,25 +86,43 @@ class Overview(APIView):
             inr=Sum("send_amount", filter=Q(send_currency="INR")),
             fees=Sum("fee_amount"),
         )
+        # Yesterday, for the comparison under each headline figure. Same
+        # calendar-day boundary as `today`, so the two are like for like.
+        yesterday = Transaction.objects.filter(
+            created_at__date=timezone.now().date() - timedelta(days=1)
+        )
+        before = yesterday.aggregate(
+            inr=Sum("send_amount", filter=Q(send_currency="INR")),
+            fees=Sum("fee_amount"),
+        )
+
         pending = Transaction.objects.needs_desk().select_related(
             "user__profile", "collect_method", "send_currency", "receive_currency",
             "corridor__source", "corridor__target",
-        )[:10]
+        ).annotate(status_since=_status_since())[:10]
 
         return Response({
             "kpis": {
                 "registered_users": User.objects.count(),
                 "new_users": User.objects.filter(date_joined__range=(since, until)).count(),
                 "transfers_today": today.count(),
-                "processed_today_inr": str(processed["inr"] or 0),
-                "processed_today_xaf": str(processed["xaf"] or 0),
-                "fees_today": str(processed["fees"] or 0),
+                # Formatted here, like every other figure: INR groups by lakh
+                # and XAF has no subunit, and the desk should read the same
+                # string the customer was shown.
+                "processed_today_inr": money(processed["inr"] or 0, "INR"),
+                "processed_today_xaf": money(processed["xaf"] or 0, "XAF"),
+                "fees_today": money(processed["fees"] or 0, "INR"),
                 "waiting_on_desk": Transaction.objects.needs_desk().count(),
                 "open_disputes": Dispute.objects.filter(state=Dispute.OPEN).count(),
             },
+            "deltas": {
+                "transfers": _change(today.count(), yesterday.count()),
+                "processed_inr": _change(processed["inr"], before["inr"]),
+                "fees": _change(processed["fees"], before["fees"]),
+            },
             "volume_series": self.volume_series(since, until),
             "by_method": self.by_method(rows),
-            "pending": TransactionListSerializer(pending, many=True).data,
+            "pending": AdminTransactionListSerializer(pending, many=True).data,
         })
 
     def volume_series(self, since, until):
@@ -128,15 +154,79 @@ class Overview(APIView):
         ]
 
 
+def _change(now_value, before_value):
+    """Today against yesterday, as a percentage.
+
+    Null when yesterday was zero. A rise from nothing is not a percentage, and
+    rendering it as +100% tells the desk a story about a number that has no
+    baseline.
+    """
+    now_value = Decimal(now_value or 0)
+    before_value = Decimal(before_value or 0)
+    if before_value == 0:
+        return None
+    percent = (now_value - before_value) / before_value * 100
+    return {
+        "percent": str(percent.quantize(Decimal("0.1"))),
+        "direction": "up" if percent > 0 else "down" if percent < 0 else "flat",
+    }
+
+
+def _status_since():
+    """When the transaction last changed state, as a scalar subquery.
+
+    An aggregate annotation would add a GROUP BY, and a grouped queryset loses
+    its default ordering — which paginates a desk queue in an order nobody
+    chose. A correlated subquery reads the same value and leaves the query
+    shape alone.
+    """
+    return Subquery(
+        StatusHistory.objects.filter(transaction=OuterRef("pk"))
+        .order_by("-at")
+        .values("at")[:1]
+    )
+
+
+class Badges(APIView):
+    """The counts beside each item in the desk sidebar.
+
+    One request, because five screens' worth of badges polled separately is
+    five times the load for a number nobody reads twice. Each count is the
+    number of things asking for a person's attention — not a total.
+    """
+
+    permission_classes = [IsDesk]
+
+    def get(self, request):
+        day_ago = timezone.now() - timedelta(days=1)
+        return Response({
+            "transactions": Transaction.objects.needs_desk().count(),
+            "messages": Transaction.objects.filter(
+                messages__read_at__isnull=True, messages__is_from_desk=False
+            ).distinct().count(),
+            "notifications": Notification.objects.filter(
+                user=request.user, audience=Notification.ADMIN, read_at__isnull=True
+            ).count(),
+            "disputes": Dispute.objects.filter(state=Dispute.OPEN).count(),
+            # Only what is worth waking up for. Every scanner on the internet
+            # produces low-severity noise, and a badge that is never zero is a
+            # badge nobody looks at.
+            "security": SecurityEvent.objects.filter(
+                at__gte=day_ago,
+                severity__in=[Severity.HIGH, Severity.CRITICAL],
+            ).count(),
+        })
+
+
 class AdminTransactionList(generics.ListAPIView):
     permission_classes = [IsDesk]
-    serializer_class = TransactionListSerializer
+    serializer_class = AdminTransactionListSerializer
 
     def get_queryset(self):
         queryset = Transaction.objects.select_related(
             "user__profile", "collect_method", "corridor__source", "corridor__target",
             "send_currency", "receive_currency",
-        )
+        ).annotate(status_since=_status_since())
         params = self.request.query_params
         wanted = params.get("status", "all")
         if wanted == "needs_desk":
@@ -193,12 +283,26 @@ class AdminTransactionDetail(APIView):
             ).prefetch_related("history", "attachments"),
             reference=reference,
         )
-        audit.record(actor=request.user, action="transaction.opened",
-                     summary=f"{request.user.email} opened {txn.reference} for verification",
-                     target=txn, request=request)
+        # One row per sitting, not one per render. The screen reloads itself
+        # after every decision, and a desk that refreshes while waiting for a
+        # payment would otherwise bury the entry that says what it decided.
+        opened_recently = AuditEntry.objects.filter(
+            actor=request.user,
+            action="transaction.opened",
+            target_id=str(txn.pk),
+            at__gte=timezone.now() - timedelta(minutes=10),
+        ).exists()
+        if not opened_recently:
+            audit.record(actor=request.user, action="transaction.opened",
+                         summary=f"{request.user.email} opened {txn.reference} for verification",
+                         target=txn, request=request)
 
         profile = getattr(txn.user, "profile", None)
         instruction = txn.instruction
+        customer_counts = Transaction.objects.filter(user=txn.user).aggregate(
+            transfers=Count("id"),
+            completed=Count("id", filter=Q(status=Status.COMPLETED)),
+        )
 
         return Response({
             "transaction": TransactionDetailSerializer(txn, context={"request": request}).data,
@@ -211,15 +315,16 @@ class AdminTransactionDetail(APIView):
                 "country": profile.country_id if profile else None,
                 "member_since": txn.user.date_joined,
                 "photo_url": _photo_url(profile),
-                "completed_transfers": Transaction.objects.filter(
-                    user=txn.user, status=Status.COMPLETED).count(),
+                "transfers": customer_counts["transfers"],
+                "completed_transfers": customer_counts["completed"],
                 "disputes": Dispute.objects.filter(transaction__user=txn.user).count(),
             },
             "attachments": AttachmentSerializer(
                 txn.attachments.all(), many=True, context={"request": request}
             ).data,
+            "waiting_minutes": _waiting_minutes(txn),
             "expected": {
-                "amount": str(txn.send_amount),
+                "amount": money(txn.send_amount, txn.send_currency_id),
                 "currency": txn.send_currency_id,
                 "to": (instruction.ordered_fields().get("number")
                        or instruction.ordered_fields().get("upi_id") or "") if instruction else "",
@@ -228,8 +333,8 @@ class AdminTransactionDetail(APIView):
             "payout": {
                 "rate_used": str(txn.rate_used),
                 "fee_percent": str(txn.fee_percent),
-                "fee_amount": str(txn.fee_amount),
-                "pay_customer": str(txn.receive_amount),
+                "fee_amount": money(txn.fee_amount, txn.receive_currency_id),
+                "pay_customer": money(txn.receive_amount, txn.receive_currency_id),
                 "currency": txn.receive_currency_id,
             },
             "risk": _risk_checks(txn),
@@ -237,6 +342,19 @@ class AdminTransactionDetail(APIView):
                 AuditEntry.objects.filter(target_id=str(txn.pk))[:20], many=True
             ).data,
         })
+
+
+def _waiting_minutes(txn):
+    """How long the desk has been the thing holding this transfer up.
+
+    Null when it is not: a transfer waiting on the customer to pay is not a
+    queue the desk can clear, and counting it as one makes the board lie.
+    """
+    if txn.status not in (Status.PROOF_SUBMITTED, Status.PAYMENT_VERIFICATION):
+        return None
+    last = txn.history.all().last()
+    since = last.at if last else txn.created_at
+    return int((timezone.now() - since).total_seconds() // 60)
 
 
 def _photo_url(profile):
