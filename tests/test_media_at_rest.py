@@ -352,6 +352,44 @@ def test_the_deploy_check_warns_when_the_callers_address_is_unknowable(settings)
     assert check_the_client_address_is_knowable(None) == []
 
 
+def test_the_deploy_check_catches_smtp_selected_but_not_configured(settings):
+    """The failure this exists for is silent: Django posts to localhost:25 and
+    logs, while the customer waits for a reset that is never coming."""
+    from nkenzapay.common.checks import check_mail_can_actually_be_sent
+
+    settings.EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
+    settings.EMAIL_HOST = ""
+    assert "nkenzapay.E013" in [
+        p.id for p in check_mail_can_actually_be_sent(None)
+    ]
+
+    settings.EMAIL_HOST = "mail.example.com"
+    settings.EMAIL_USE_TLS = True
+    settings.EMAIL_USE_SSL = False
+    assert check_mail_can_actually_be_sent(None) == []
+
+
+def test_the_deploy_check_refuses_tls_and_ssl_together(settings):
+    from nkenzapay.common.checks import check_mail_can_actually_be_sent
+
+    settings.EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
+    settings.EMAIL_HOST = "mail.example.com"
+    settings.EMAIL_USE_TLS = True
+    settings.EMAIL_USE_SSL = True
+    assert "nkenzapay.E014" in [
+        p.id for p in check_mail_can_actually_be_sent(None)
+    ]
+
+
+def test_the_console_backend_is_left_alone(settings):
+    """Nothing to warn about when mail is only being printed."""
+    from nkenzapay.common.checks import check_mail_can_actually_be_sent
+
+    settings.EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
+    settings.EMAIL_HOST = ""
+    assert check_mail_can_actually_be_sent(None) == []
+
+
 def test_the_deploy_check_refuses_one_key_doing_two_jobs(settings):
     from nkenzapay.common.checks import check_secrets_are_real
 

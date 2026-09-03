@@ -284,6 +284,27 @@ DATA_UPLOAD_MAX_NUMBER_FIELDS = 200
 EMAIL_BACKEND = env("EMAIL_BACKEND")
 DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", default="NkenzaPay <no-reply@nkenzapay.com>")
 
+# Where mail is actually handed to. Django's own defaults are localhost:25
+# with no authentication, so leaving these unset while the SMTP backend is
+# selected does not fail — it quietly posts into a local mail server that may
+# not exist. The deploy check refuses that combination rather than letting a
+# password reset disappear.
+EMAIL_HOST = env("EMAIL_HOST", default="")
+EMAIL_PORT = env.int("EMAIL_PORT", default=587)
+EMAIL_HOST_USER = env("EMAIL_HOST_USER", default="")
+EMAIL_HOST_PASSWORD = env("EMAIL_HOST_PASSWORD", default="")
+EMAIL_USE_TLS = env.bool("EMAIL_USE_TLS", default=True)
+EMAIL_USE_SSL = env.bool("EMAIL_USE_SSL", default=False)
+
+# A mail server that accepts the connection and then stops talking would
+# otherwise hold the request thread until the process is recycled. Shared
+# hosting is exactly where that happens.
+EMAIL_TIMEOUT = env.int("EMAIL_TIMEOUT", default=10)
+
+# Error mail from Django itself, which should not look like it came from a
+# customer-facing address.
+SERVER_EMAIL = env("SERVER_EMAIL", default=DEFAULT_FROM_EMAIL)
+
 # Foreign exchange. The key is read here and never leaves the server.
 FX = {
     "PROVIDER": env("FX_PROVIDER"),

@@ -193,6 +193,64 @@ def check_the_client_address_is_knowable(app_configs, **kwargs):
 
 
 @register("nkenzapay", deploy=True)
+def check_mail_can_actually_be_sent(app_configs, **kwargs):
+    """Selecting the SMTP backend is not the same as configuring it.
+
+    Django defaults EMAIL_HOST to localhost and EMAIL_PORT to 25 with no
+    authentication. With the SMTP backend selected and nothing else set, mail
+    is handed to a local server that may not exist and the failure is a log
+    line nobody reads — while the customer waits for a password reset that is
+    never coming.
+    """
+    if "smtp" not in settings.EMAIL_BACKEND:
+        return []
+
+    problems = []
+
+    if not settings.EMAIL_HOST:
+        problems.append(
+            Error(
+                "The SMTP email backend is selected but EMAIL_HOST is empty.",
+                hint=(
+                    "Django will post to localhost:25 without authentication. "
+                    "Set EMAIL_HOST, EMAIL_PORT, EMAIL_HOST_USER and "
+                    "EMAIL_HOST_PASSWORD, or switch EMAIL_BACKEND back to the "
+                    "console backend until you have them."
+                ),
+                id="nkenzapay.E013",
+            )
+        )
+
+    if settings.EMAIL_USE_TLS and settings.EMAIL_USE_SSL:
+        problems.append(
+            Error(
+                "EMAIL_USE_TLS and EMAIL_USE_SSL are both on.",
+                hint=(
+                    "They are different things and Django refuses both at once. "
+                    "Port 587 wants TLS; port 465 wants SSL."
+                ),
+                id="nkenzapay.E014",
+            )
+        )
+
+    if settings.EMAIL_HOST and not (settings.EMAIL_USE_TLS or settings.EMAIL_USE_SSL):
+        problems.append(
+            Warning(
+                "Mail is sent to an external host without TLS or SSL.",
+                hint=(
+                    "The password in EMAIL_HOST_PASSWORD, and every reset link "
+                    "the platform sends, would cross the network in the clear. "
+                    "Silence this with SILENCED_SYSTEM_CHECKS=nkenzapay.W015 "
+                    "only if the host is on this machine."
+                ),
+                id="nkenzapay.W015",
+            )
+        )
+
+    return problems
+
+
+@register("nkenzapay", deploy=True)
 def check_proxy_secret_is_usable(app_configs, **kwargs):
     """The shared secret that lets the front end vouch for a caller's address.
 
