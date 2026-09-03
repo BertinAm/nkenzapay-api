@@ -95,6 +95,17 @@ class PlatformSetting(models.Model):
             "new_device_check": True,
             "max_open_transfers": 3,
         },
+        # Canned replies for the desk inbox. Data, not constants: the desk
+        # rewrites these as it learns which sentences actually stop a customer
+        # worrying, and that should not need a deploy.
+        "desk": {
+            "quick_replies": [
+                "Checking now",
+                "Payment verified",
+                "Payout sent",
+                "Please resend the screenshot",
+            ],
+        },
     }
 
     def __str__(self):

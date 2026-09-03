@@ -457,11 +457,36 @@ class AdminInbox(APIView):
                                      messages__is_from_desk=False).distinct()
         elif wanted == "needs_desk":
             threads = threads.needs_desk()
-        return Response(ThreadSummarySerializer(threads[:50], many=True).data)
+        return Response({
+            "threads": ThreadSummarySerializer(threads[:50], many=True).data,
+            # Sent with the inbox rather than read from the settings endpoint,
+            # which only accounts that can write settings may open. Someone
+            # answering the chat all day is not necessarily one of them.
+            "quick_replies": PlatformSetting.get("desk").get("quick_replies", []),
+        })
 
 
 class AdminReply(APIView):
-    permission_classes = [CanChat]
+    def get_permissions(self):
+        """Reading a conversation is part of looking at a transfer. Writing
+        into it, in the platform's own voice, is a separate thing to be
+        trusted with."""
+        return [CanChat()] if self.request.method == "POST" else [IsDesk()]
+
+    def get(self, request, reference):
+        txn = generics.get_object_or_404(Transaction, reference=reference)
+        messages = txn.messages.select_related("sender").all()
+
+        # The desk is looking at them now, so the unread badge should stop
+        # saying otherwise. Only inbound messages: the desk's own were never
+        # unread to it.
+        txn.messages.filter(read_at__isnull=True, is_from_desk=False).update(
+            read_at=timezone.now()
+        )
+
+        return Response(
+            MessageSerializer(messages, many=True, context={"request": request}).data
+        )
 
     def post(self, request, reference):
         body = (request.data.get("body") or "").strip()
@@ -835,6 +860,21 @@ class AdminDisputeList(generics.ListAPIView):
         if state:
             queryset = queryset.filter(state=state)
         return queryset
+
+    def list(self, request, *args, **kwargs):
+        response = super().list(request, *args, **kwargs)
+        # The resolutions travel with the list so the screen offers exactly the
+        # ones the resolve endpoint will accept. A hardcoded copy in the front
+        # end is a copy that drifts.
+        response.data["resolutions"] = [
+            {"value": value, "label": label} for value, label in Dispute.RESOLUTIONS
+        ]
+        response.data["counts"] = {
+            "open": Dispute.objects.filter(state=Dispute.OPEN).count(),
+            "resolved": Dispute.objects.filter(state=Dispute.RESOLVED).count(),
+            "escalated": Dispute.objects.filter(state=Dispute.ESCALATED).count(),
+        }
+        return response
 
 
 class AdminDisputeResolve(APIView):

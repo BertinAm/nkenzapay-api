@@ -215,12 +215,19 @@ class DisputeSerializer(serializers.ModelSerializer):
     amount = serializers.SerializerMethodField()
     reason = serializers.CharField(source="reason_display", read_only=True)
     age_days = serializers.SerializerMethodField()
+    method = serializers.CharField(source="transaction.collect_method.label",
+                                   read_only=True, default="")
+    # When the desk said it had paid. On a "money never arrived" case this is
+    # the first thing anyone asks for, and it is the difference between a
+    # payout that is late and one that was never made.
+    payout_sent_at = serializers.DateTimeField(source="transaction.payout_sent_at",
+                                               read_only=True)
 
     class Meta:
         model = Dispute
         fields = ["id", "reference", "customer", "initials", "amount", "reason_code",
                   "reason", "detail", "state", "resolution", "resolution_note",
-                  "created_at", "resolved_at", "age_days"]
+                  "created_at", "resolved_at", "age_days", "method", "payout_sent_at"]
 
     def get_customer(self, obj):
         return obj.transaction.user.display_name
