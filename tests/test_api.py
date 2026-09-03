@@ -147,6 +147,52 @@ def test_countries_carry_their_availability(api, seeded):
     assert rows["NG"]["is_enabled"] is False
 
 
+def test_an_owner_can_add_a_country_with_its_corridors(api, seeded, db):
+    """A country with no corridors cannot be traded either way, so adding one
+    by hand afterwards would be a step somebody forgets."""
+    from django.utils import timezone
+
+    from nkenzapay.accounts.models import AdminRole, AdminUser, User
+    from nkenzapay.geo.models import Corridor, Country
+
+    owner = User.objects.create_user(email="owner@nkenzapay.com",
+                                     password="a-long-password-9")
+    AdminUser.objects.create(user=owner, role=AdminRole.OWNER,
+                             totp_confirmed_at=timezone.now())
+    api.force_authenticate(owner)
+
+    response = api.post("/api/v1/admin/countries",
+                        {"iso2": "ke", "name": "Kenya", "currency": "INR",
+                         "dial_code": "+254"},
+                        format="json")
+    assert response.status_code == 201, response.json()
+
+    country = Country.objects.get(pk="KE")
+    # Added, not opened. Those are two different decisions.
+    assert country.is_enabled is False
+    assert Corridor.objects.filter(source=country).exists()
+    assert Corridor.objects.filter(target=country).exists()
+    assert not Corridor.objects.filter(source=country, is_enabled=True).exists()
+
+
+def test_adding_a_country_refuses_a_currency_the_platform_does_not_know(api, seeded, db):
+    from django.utils import timezone
+
+    from nkenzapay.accounts.models import AdminRole, AdminUser, User
+
+    owner = User.objects.create_user(email="owner2@nkenzapay.com",
+                                     password="a-long-password-9")
+    AdminUser.objects.create(user=owner, role=AdminRole.OWNER,
+                             totp_confirmed_at=timezone.now())
+    api.force_authenticate(owner)
+
+    response = api.post("/api/v1/admin/countries",
+                        {"iso2": "BR", "name": "Brazil", "currency": "BRL"},
+                        format="json")
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "unknown_currency"
+
+
 def test_the_desk_area_is_closed_to_customers(signed_in, seeded):
     assert signed_in.get("/api/v1/admin/overview").status_code == 403
     assert signed_in.get("/api/v1/admin/users").status_code == 403

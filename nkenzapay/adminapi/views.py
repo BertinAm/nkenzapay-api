@@ -18,7 +18,7 @@ from nkenzapay.common.exceptions import DomainError
 from nkenzapay.content.models import NewsPost
 from nkenzapay.content.serializers import AdminNewsSerializer
 from nkenzapay.disputes.models import Dispute
-from nkenzapay.geo.models import Corridor, Country
+from nkenzapay.geo.models import Corridor, Country, Currency
 from nkenzapay.geo.serializers import CorridorSerializer, CountrySerializer
 from nkenzapay.notifications.models import DeliveryRule, Notification
 from nkenzapay.security.models import SecurityEvent, Severity
@@ -171,6 +171,22 @@ def _change(now_value, before_value):
         "percent": str(percent.quantize(Decimal("0.1"))),
         "direction": "up" if percent > 0 else "down" if percent < 0 else "flat",
     }
+
+
+def _country_fee_rule(country, rules):
+    """The fee rule that applies to a country on its own.
+
+    Its own rule if it has one, otherwise the global. Corridor-scoped rules are
+    ignored here because a per-country figure cannot represent them; the quote
+    engine still applies them.
+    """
+    for rule in rules:
+        if rule.country_id == country.iso2 and rule.corridor_id is None:
+            return rule
+    for rule in rules:
+        if rule.country_id is None and rule.corridor_id is None:
+            return rule
+    return None
 
 
 def _status_since():
@@ -687,6 +703,35 @@ class FeeSettings(APIView):
         )
         return Response(FeeRuleSerializer(rule).data, status=status.HTTP_201_CREATED)
 
+    def delete(self, request):
+        """Retire a rule rather than remove it.
+
+        The row is what a transfer priced under it points at. Deleting it would
+        leave old orders explaining their fee with a rule that no longer
+        exists, so it is closed off with a valid_to and left where it is.
+
+        The global rule cannot go: without one, nothing can be priced at all.
+        """
+        rule = generics.get_object_or_404(FeeRule, pk=request.query_params.get("id"))
+        if rule.corridor_id is None and rule.country_id is None:
+            raise DomainError(
+                "global_fee_required",
+                "The global fee cannot be removed. Change its percentage instead.",
+            )
+
+        rule.valid_to = timezone.now()
+        rule.is_active = False
+        rule.save(update_fields=["valid_to", "is_active"])
+
+        audit.record(
+            actor=request.user, action="settings.fee_removed",
+            summary=(f"{request.user.email} removed the "
+                     f"{rule.country.name if rule.country else str(rule.corridor)} "
+                     f"fee override of {rule.percent}%"),
+            target=rule, before={"percent": str(rule.percent)}, request=request,
+        )
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
 
 class LimitSettings(APIView):
     permission_classes = [CanWriteSettings]
@@ -784,13 +829,104 @@ class AdminCountries(APIView):
     permission_classes = [CanWriteSettings]
 
     def get(self, request):
+        countries = list(Country.objects.select_related("currency"))
+        rows = CountrySerializer(countries, many=True).data
+
+        # Enabled ways in, per country. The payout side is the desk's own
+        # business and is not what the screen is counting.
+        method_counts = dict(
+            PaymentMethod.objects.filter(is_enabled=True, side="collect")
+            .values_list("country_id")
+            .annotate(total=Count("id"))
+        )
+
+        # Money that has left each country, in that country's own currency.
+        # Scoped to the source side deliberately: a country has one currency,
+        # so this adds up. Summing both directions would add XAF to INR.
+        sent = {
+            row["corridor__source"]: row["total"] or 0
+            for row in Transaction.objects.filter(status=Status.COMPLETED)
+            .values("corridor__source")
+            .annotate(total=Sum("send_amount"))
+        }
+        counts = {
+            row["corridor__source"]: row["total"]
+            for row in Transaction.objects.values("corridor__source")
+            .annotate(total=Count("id"))
+        }
+        fee_rules = list(
+            FeeRule.objects.filter(is_active=True).order_by("-valid_from")
+        )
+
+        for row, country in zip(rows, countries):
+            rule = _country_fee_rule(country, fee_rules)
+            row["method_count"] = method_counts.get(country.iso2, 0)
+            row["transfer_count"] = counts.get(country.iso2, 0)
+            row["volume"] = money(sent.get(country.iso2, 0), country.currency_id)
+            # The rule scoped to this country, or the global one. A corridor
+            # rule can still beat both for a particular pair, which a
+            # per-country column cannot show — see resolve_fee_rule.
+            row["fee_percent"] = str(rule.percent) if rule else None
+
         return Response({
-            "countries": CountrySerializer(
-                Country.objects.select_related("currency"), many=True).data,
+            "countries": rows,
             "corridors": CorridorSerializer(
                 Corridor.objects.select_related("source__currency", "target__currency"),
                 many=True).data,
         })
+
+    def post(self, request):
+        """Open a new country, switched off, with its corridors created.
+
+        A country with no corridors cannot be traded either way, so making one
+        by hand afterwards would be a step nobody remembers. Every corridor is
+        created disabled: adding a country is not the same decision as opening
+        it for business.
+        """
+        iso2 = (request.data.get("iso2") or "").upper()
+        name = (request.data.get("name") or "").strip()
+        currency_code = (request.data.get("currency") or "").upper()
+
+        if len(iso2) != 2 or not name:
+            raise DomainError(
+                "bad_country", "A country needs a two-letter code and a name."
+            )
+        if Country.objects.filter(pk=iso2).exists():
+            raise DomainError("country_exists", f"{iso2} is already listed.")
+
+        currency = Currency.objects.filter(pk=currency_code).first()
+        if currency is None:
+            raise DomainError(
+                "unknown_currency",
+                f"{currency_code or 'That currency'} is not one of the "
+                "currencies this platform knows. Add it first.",
+            )
+
+        country = Country.objects.create(
+            iso2=iso2,
+            name=name,
+            currency=currency,
+            dial_code=request.data.get("dial_code", ""),
+            flag_emoji=request.data.get("flag_emoji", ""),
+            is_enabled=False,
+            is_origin=True,
+            is_destination=True,
+            sort_order=(Country.objects.count() + 1),
+        )
+
+        for other in Country.objects.exclude(pk=iso2):
+            Corridor.objects.get_or_create(
+                source=country, target=other, defaults={"is_enabled": False}
+            )
+            Corridor.objects.get_or_create(
+                source=other, target=country, defaults={"is_enabled": False}
+            )
+
+        audit.record(actor=request.user, action="settings.country_added",
+                     summary=f"{request.user.email} added {country.name} ({iso2})",
+                     target=country, request=request)
+        return Response(CountrySerializer(country).data,
+                        status=status.HTTP_201_CREATED)
 
     def put(self, request, iso2=None):
         country = generics.get_object_or_404(Country, pk=(iso2 or "").upper())
