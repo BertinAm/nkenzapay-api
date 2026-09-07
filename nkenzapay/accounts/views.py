@@ -1,7 +1,9 @@
 import hashlib
 import secrets
 from datetime import timedelta
+from urllib.parse import quote
 
+from django.conf import settings
 from django.contrib.auth import authenticate, login, logout
 from django.core.cache import cache
 from django.db.models import Count, Q, Sum
@@ -64,8 +66,17 @@ class RegisterView(APIView):
             marketing_opt_in=form.validated_data["marketing_opt_in"],
         )
         notifications.seed_preferences(user)
-        issue_email_token(user, EmailToken.PURPOSE_VERIFY)
+        token = issue_email_token(user, EmailToken.PURPOSE_VERIFY)
         notifications.notify(user, "account.welcome")
+        notifications.notify(
+            user, "account.verify_email",
+            email_body=(
+                "Confirm your email address to finish setting up your "
+                "NkenzaPay account:\n\n"
+                f"{verify_link(token)}\n\n"
+                "The link works once and expires in 24 hours."
+            ),
+        )
 
         login(request, user)
         record_login(request, user, succeeded=True)
@@ -224,8 +235,21 @@ class PasswordResetRequestView(APIView):
         )
 
         if user is not None:
-            issue_email_token(user, EmailToken.PURPOSE_RESET)
-            notifications.notify(user, "account.password_reset")
+            token = issue_email_token(user, EmailToken.PURPOSE_RESET)
+            notifications.notify(
+                user, "account.password_reset",
+                # The link goes in the email and nowhere else. The stored
+                # notification and the in-app bell keep the generic wording,
+                # because a live reset link sitting in a row anyone with the
+                # session can read is a second way into the account.
+                email_body=(
+                    "Someone asked to reset the password on your NkenzaPay "
+                    "account. If it was you, set a new one here:\n\n"
+                    f"{reset_link(token)}\n\n"
+                    "The link works once and expires in 24 hours. If this was "
+                    "not you, ignore this message and tell the desk."
+                ),
+            )
         # Always the same answer. Confirming which addresses have accounts is a
         # free list for anyone probing.
         return Response({"sent": True})
@@ -302,6 +326,14 @@ def my_stats(request):
 
 
 # --- helpers -------------------------------------------------------------
+
+
+def reset_link(token):
+    return f"{settings.SITE_URL}/reset-password?token={quote(token)}"
+
+
+def verify_link(token):
+    return f"{settings.SITE_URL}/verify-email?token={quote(token)}"
 
 
 def issue_email_token(user, purpose, ttl_hours=24):

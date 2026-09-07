@@ -284,6 +284,11 @@ DATA_UPLOAD_MAX_NUMBER_FIELDS = 200
 EMAIL_BACKEND = env("EMAIL_BACKEND")
 DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", default="NkenzaPay <no-reply@nkenzapay.com>")
 
+# Where the customer app lives. Links in email are built from this, so getting
+# it wrong sends people to a domain that is not yours — which is exactly what a
+# password reset link must never do.
+SITE_URL = env("SITE_URL", default="https://nkenzapay.com").rstrip("/")
+
 # Where mail is actually handed to. Django's own defaults are localhost:25
 # with no authentication, so leaving these unset while the SMTP backend is
 # selected does not fail — it quietly posts into a local mail server that may

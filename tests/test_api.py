@@ -193,6 +193,50 @@ def test_adding_a_country_refuses_a_currency_the_platform_does_not_know(api, see
     assert response.json()["error"]["code"] == "unknown_currency"
 
 
+def test_a_password_reset_email_carries_a_working_link(api, customer, mailoutbox, settings):
+    """The bug this guards against shipped once already: the endpoint answered
+    {"sent": true}, an email arrived, and it contained no link at all — so a
+    customer who forgot their password was locked out for good."""
+    settings.SITE_URL = "https://nkenzapay.com"
+
+    api.post("/api/v1/auth/password/reset", {"email": customer.email},
+             format="json")
+
+    assert len(mailoutbox) == 1
+    body = mailoutbox[0].body
+    assert "https://nkenzapay.com/reset-password?token=" in body
+
+    # And the link works.
+    token = body.split("token=")[1].split()[0]
+    response = api.post("/api/v1/auth/password/reset/confirm",
+                        {"token": token, "new_password": "a-brand-new-password-1"},
+                        format="json")
+    assert response.status_code == 200, response.json()
+
+
+def test_the_reset_token_never_reaches_the_stored_notification(api, customer, mailoutbox):
+    """A live reset link sitting in a row the bell renders is a second way into
+    the account, readable by anyone holding the session."""
+    from nkenzapay.notifications.models import Notification
+
+    api.post("/api/v1/auth/password/reset", {"email": customer.email},
+             format="json")
+
+    token = mailoutbox[0].body.split("token=")[1].split()[0]
+    stored = Notification.objects.filter(event="account.password_reset").first()
+    assert stored is not None
+    assert token not in stored.body
+
+
+def test_a_reset_for_an_unknown_address_sends_nothing(api, db, mailoutbox):
+    """Same answer either way, so nobody can harvest which addresses exist —
+    but no email leaves the building."""
+    response = api.post("/api/v1/auth/password/reset",
+                        {"email": "nobody@example.com"}, format="json")
+    assert response.json() == {"sent": True}
+    assert mailoutbox == []
+
+
 def test_the_desk_area_is_closed_to_customers(signed_in, seeded):
     assert signed_in.get("/api/v1/admin/overview").status_code == 403
     assert signed_in.get("/api/v1/admin/users").status_code == 403

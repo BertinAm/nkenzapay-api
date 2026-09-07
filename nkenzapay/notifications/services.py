@@ -88,8 +88,15 @@ CATALOGUE = {
 }
 
 
-def notify(user, event, *, transaction=None, context=None, audience=None):
-    """Create one notification and send its email if the rules ask for it."""
+def notify(user, event, *, transaction=None, context=None, audience=None,
+           email_body=None):
+    """Create one notification and send its email if the rules ask for it.
+
+    `email_body` replaces the body in the email only. A reset link belongs in
+    the message sent to the address that asked for it, and nowhere else — not
+    in the bell, which anyone holding the session can read, and not in the row
+    stored against the account.
+    """
     entry = CATALOGUE.get(event)
     if entry is None:
         logger.warning("No catalogue entry for notification event %r", event)
@@ -121,7 +128,7 @@ def notify(user, event, *, transaction=None, context=None, audience=None):
     )
 
     if _should_email(user, event, audience, emails_by_default):
-        _send_email(notification)
+        _send_email(notification, body=email_body)
 
     _publish(notification)
     return notification
@@ -184,11 +191,11 @@ def _preference_group(event):
     return ""
 
 
-def _send_email(notification):
+def _send_email(notification, body=None):
     try:
         send_mail(
             subject=notification.title,
-            message=notification.body,
+            message=body or notification.body,
             from_email=settings.DEFAULT_FROM_EMAIL,
             recipient_list=[notification.user.email],
             fail_silently=False,
