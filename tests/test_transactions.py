@@ -34,6 +34,56 @@ def attach_proof(txn, user):
 # --- creation ------------------------------------------------------------
 
 
+def test_a_dial_code_arrives_with_the_amount_already_in_it(receive_order, db):
+    """The customer dials what they are shown. Editing the amount by hand sends
+    the wrong figure to the right number, which is the expensive mistake."""
+    from nkenzapay.payments.models import PaymentInstruction
+
+    instruction = receive_order.collect_method.instruction
+    instruction.fields = {
+        "number": "600000000",
+        "account_name": "Example account",
+        "ussd_personal": "*126*1*600000000*{amount}#",
+        "ussd_business": "*126*5*1*600000000*{amount}#",
+    }
+    instruction.save(update_fields=["fields"])
+
+    rows = {row["label"]: row["value"]
+            for row in instruction.rows_for_chat(receive_order)}
+
+    # XAF has no subunit, so no decimals and no grouping: a USSD menu takes
+    # digits.
+    assert rows["Dial this"] == "*126*1*600000000*100000#"
+    assert rows["Dial this from a business SIM"] == "*126*5*1*600000000*100000#"
+
+
+def test_a_dial_code_is_hidden_until_there_is_an_amount(receive_order, db):
+    """Half a code is worse than none: somebody would dial it with the
+    placeholder still in."""
+    instruction = receive_order.collect_method.instruction
+    instruction.fields = {"number": "600000000",
+                          "ussd_personal": "*126*1*600000000*{amount}#"}
+    instruction.save(update_fields=["fields"])
+
+    labels = [row["label"] for row in instruction.rows_for_chat(None)]
+    assert "Dial this" not in labels
+
+    # And an anonymous visitor never sees it, because it carries the number.
+    assert "ussd_personal" not in instruction.masked_fields()
+
+
+def test_a_broken_placeholder_shows_rather_than_crashing(receive_order, db):
+    """A typo in the admin should look wrong to the desk, not take the chat
+    bubble down with it."""
+    instruction = receive_order.collect_method.instruction
+    instruction.fields = {"ussd_personal": "*126*1*600000000*{amt}#"}
+    instruction.save(update_fields=["fields"])
+
+    rows = {row["label"]: row["value"]
+            for row in instruction.rows_for_chat(receive_order)}
+    assert rows["Dial this"] == "*126*1*600000000*{amt}#"
+
+
 def test_creation_freezes_the_quote(receive_order):
     assert receive_order.rate_used == Decimal("0.1693500000")
     assert receive_order.fee_percent == Decimal("6.00")

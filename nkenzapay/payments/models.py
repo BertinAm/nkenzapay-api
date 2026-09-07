@@ -56,8 +56,8 @@ class PaymentInstruction(models.Model):
     # Which keys each method expects, and the order they are shown in. Used by
     # the chat instruction block and validated on save in the admin API.
     FIELD_SETS = {
-        "mtn_momo": ["number", "account_name"],
-        "orange_money": ["number", "account_name"],
+        "mtn_momo": ["number", "account_name", "ussd_personal", "ussd_business"],
+        "orange_money": ["number", "account_name", "ussd_personal", "ussd_business"],
         "upi": ["upi_id", "merchant_name"],
         "bank": ["account_holder", "bank", "account_number", "ifsc", "branch"],
         "imps": ["account_holder", "bank", "account_number", "ifsc", "branch"],
@@ -68,6 +68,8 @@ class PaymentInstruction(models.Model):
     LABELS = {
         "number": "Number",
         "account_name": "Account name",
+        "ussd_personal": "Dial this",
+        "ussd_business": "Dial this from a business SIM",
         "upi_id": "UPI ID",
         "merchant_name": "Merchant name",
         "account_holder": "Account holder",
@@ -79,6 +81,21 @@ class PaymentInstruction(models.Model):
         "wallet_name": "Wallet name",
         "location": "Location",
         "contact": "Contact",
+    }
+
+    # Shown under the box in the admin. The USSD ones carry the placeholder,
+    # because a code saved without it sends every customer the same amount.
+    HINTS = {
+        "ussd_personal": (
+            "The code a customer dials from an ordinary SIM. Write {amount} "
+            "where the figure goes, for example *126*1*600000000*{amount}#"
+        ),
+        "ussd_business": (
+            "The code for a business SIM, if the network has a separate one. "
+            "Write {amount} where the figure goes."
+        ),
+        "number": "The number customers pay into.",
+        "account_name": "Exactly as the network shows it, so it can be checked.",
     }
 
     def __str__(self):
@@ -98,6 +115,10 @@ class PaymentInstruction(models.Model):
         recognise the account, not enough to be useful to anyone else."""
         masked = {}
         for key, value in self.ordered_fields().items():
+            # A dial string carries the number inside it, and a masked one is
+            # no use to anybody. It appears once there is a transfer.
+            if key.startswith("ussd_"):
+                continue
             text = str(value or "")
             if key in {"account_name", "merchant_name", "account_holder", "bank",
                        "wallet_name", "location"}:
@@ -109,14 +130,30 @@ class PaymentInstruction(models.Model):
         return masked
 
     def rows_for_chat(self, transaction=None):
-        """The mono rows in the payment instructions bubble."""
-        rows = [
-            {"label": self.LABELS.get(key, key.replace("_", " ").title()),
-             "value": str(value),
-             "copyable": True}
-            for key, value in self.ordered_fields().items()
-            if value
-        ]
+        """The mono rows in the payment instructions bubble.
+
+        A dial string is stored with an {amount} in it and rendered with the
+        real figure already in place, so the customer dials what they are shown
+        instead of editing it. Getting that edit wrong sends the wrong amount to
+        the right number, which is the expensive kind of mistake.
+        """
+        rows = []
+        for key, value in self.ordered_fields().items():
+            text = str(value or "")
+            if not text:
+                continue
+            if key.startswith("ussd_"):
+                # Without a transfer there is no amount to put in it, so the
+                # half-written code is not shown at all.
+                if transaction is None:
+                    continue
+                text = _fill_ussd(text, transaction)
+            rows.append({
+                "label": self.LABELS.get(key, key.replace("_", " ").title()),
+                "value": text,
+                "copyable": True,
+            })
+
         if transaction is not None:
             from nkenzapay.common.money import format_amount
 
@@ -140,3 +177,23 @@ class PaymentInstruction(models.Model):
         return self.reference_format.format(
             order=order_number, reference=transaction.reference
         )
+
+
+def _fill_ussd(template, transaction):
+    """Put the amount into a stored dial string.
+
+    Digits only, no grouping and no currency: a USSD menu takes 100000, not
+    "100,000 XAF". An unknown placeholder is left as written rather than
+    raising — a typo in the admin should show up as a visibly wrong code the
+    desk can fix, not as a chat bubble that failed to render.
+    """
+    from nkenzapay.common.money import minor_units, quantize
+
+    amount = quantize(transaction.send_amount, transaction.send_currency_id)
+    places = minor_units(transaction.send_currency_id)
+    plain = f"{amount:.{places}f}" if places else str(int(amount))
+
+    try:
+        return template.format(amount=plain)
+    except (KeyError, IndexError, ValueError):
+        return template

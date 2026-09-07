@@ -47,10 +47,12 @@ COUNTRIES = [
 # unconfigured rather than quietly pointing somewhere wrong.
 METHODS = [
     # slug, label, country, side, icon, note, enabled, order, instruction fields
+    # The USSD codes are per-network and carry the collection number inside
+    # them, so they are blank here like every other account detail.
     ("mtn_momo", "MTN Mobile Money", "CM", "collect", "smartphone", "Instant", True, 1,
-     {"number": "", "account_name": ""}),
+     {"number": "", "account_name": "", "ussd_personal": "", "ussd_business": ""}),
     ("orange_money", "Orange Money", "CM", "collect", "smartphone", "Instant", True, 2,
-     {"number": "", "account_name": ""}),
+     {"number": "", "account_name": "", "ussd_personal": "", "ussd_business": ""}),
     ("upi", "UPI", "IN", "collect", "qr_code_2", "Instant", True, 1,
      {"upi_id": "", "merchant_name": ""}),
     ("bank", "Bank transfer", "IN", "collect", "account_balance", "NEFT/RTGS", True, 2,

@@ -35,13 +35,37 @@ class PaymentInstructionSerializer(serializers.ModelSerializer):
     """The full detail, for a participant in a transaction."""
 
     rows = serializers.SerializerMethodField()
+    fields = serializers.SerializerMethodField()
+    labels = serializers.SerializerMethodField()
+    hints = serializers.SerializerMethodField()
 
     class Meta:
         model = PaymentInstruction
-        fields = ["fields", "body", "qr_key", "reference_format", "rows", "updated_at"]
+        fields = ["fields", "labels", "hints", "body", "qr_key",
+                  "reference_format", "rows", "updated_at"]
 
     def get_rows(self, obj):
         return obj.rows_for_chat(self.context.get("transaction"))
+
+    def get_fields_data(self, obj):
+        return obj.ordered_fields()
+
+    def get_fields(self, obj):
+        """Every key the method expects, not only the ones already filled in.
+
+        A method whose field set grew after its row was written would otherwise
+        never show the new boxes in the admin, and nobody would know they were
+        missing until a customer was told to pay into nothing.
+        """
+        return obj.ordered_fields()
+
+    def get_labels(self, obj):
+        return {key: PaymentInstruction.LABELS.get(key, key.replace("_", " ").title())
+                for key in obj.ordered_fields()}
+
+    def get_hints(self, obj):
+        return {key: PaymentInstruction.HINTS.get(key, "")
+                for key in obj.ordered_fields()}
 
 
 class AdminPaymentMethodSerializer(serializers.ModelSerializer):
