@@ -90,7 +90,9 @@ DELIVERY_RULES = [
     ("admin.customer_paid", "Customer tapped I have paid", True, 2),
     ("admin.dispute_opened", "Problem reported", True, 3),
     ("admin.message_received", "New customer message", False, 4),
-    ("admin.transfer_created", "Order created", False, 5),
+    # On by default: an order arriving is the event the desk is waiting for,
+    # and a desk that only finds out by opening the screen finds out late.
+    ("admin.transfer_created", "Order created", True, 5),
     ("admin.new_device_login", "Admin sign-in from a new device", True, 6),
 ]
 

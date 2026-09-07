@@ -81,7 +81,7 @@ CATALOGUE = {
     # Desk side
     "admin.transfer_created": ("Order created",
                               "{customer} opened {reference} for {send_amount}.",
-                              "add_circle", "view", "neutral", False),
+                              "add_circle", "view", "neutral", True),
     "admin.proof_uploaded": ("Payment proof uploaded",
                              "{customer} attached a file to {reference}.",
                              "upload_file", "verify", "neutral", True),
