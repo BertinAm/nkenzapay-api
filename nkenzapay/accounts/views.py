@@ -71,11 +71,16 @@ class RegisterView(APIView):
         notifications.notify(
             user, "account.verify_email",
             email_body=(
-                "Confirm your email address to finish setting up your "
-                "NkenzaPay account:\n\n"
-                f"{verify_link(token)}\n\n"
-                "The link works once and expires in 24 hours."
+                "Welcome to NkenzaPay. Confirm your email address to finish "
+                "setting up your account.\n\n"
+                "A confirmed address is where your receipts go, and where a "
+                "reset link goes if you are ever locked out."
             ),
+            email_action={
+                "label": "Confirm my email",
+                "url": verify_link(token),
+                "footnote": "This link works once and expires in 24 hours.",
+            },
         )
 
         login(request, user)
@@ -244,11 +249,16 @@ class PasswordResetRequestView(APIView):
                 # session can read is a second way into the account.
                 email_body=(
                     "Someone asked to reset the password on your NkenzaPay "
-                    "account. If it was you, set a new one here:\n\n"
-                    f"{reset_link(token)}\n\n"
-                    "The link works once and expires in 24 hours. If this was "
-                    "not you, ignore this message and tell the desk."
+                    "account.\n\n"
+                    "If that was you, set a new one below. If it was not, your "
+                    "password has not changed. Ignore this message and tell "
+                    "the desk."
                 ),
+                email_action={
+                    "label": "Set a new password",
+                    "url": reset_link(token),
+                    "footnote": "This link works once and expires in 24 hours.",
+                },
             )
         # Always the same answer. Confirming which addresses have accounts is a
         # free list for anyone probing.

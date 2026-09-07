@@ -214,6 +214,28 @@ def test_a_password_reset_email_carries_a_working_link(api, customer, mailoutbox
     assert response.status_code == 200, response.json()
 
 
+def test_the_email_goes_out_as_text_and_html(api, customer, mailoutbox, settings):
+    """Both parts carry the same link. A client that refuses HTML, or someone
+    who reads mail as plain text, gets the message rather than an apology."""
+    settings.SITE_URL = "https://nkenzapay.com"
+    api.post("/api/v1/auth/password/reset", {"email": customer.email},
+             format="json")
+
+    message = mailoutbox[0]
+    html = next(
+        content for content, mimetype in message.alternatives
+        if mimetype == "text/html"
+    )
+
+    assert "https://nkenzapay.com/reset-password?token=" in message.body
+    assert "https://nkenzapay.com/reset-password?token=" in html
+    assert "Set a new password" in html
+    # No stylesheet, no webfont, no image: an email that only looks right once
+    # images are allowed looks broken the first time most people see it.
+    assert "<link" not in html
+    assert "<img" not in html
+
+
 def test_the_reset_token_never_reaches_the_stored_notification(api, customer, mailoutbox):
     """A live reset link sitting in a row the bell renders is a second way into
     the account, readable by anyone holding the session."""

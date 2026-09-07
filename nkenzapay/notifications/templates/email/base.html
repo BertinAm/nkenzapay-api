@@ -1,0 +1,104 @@
+{% comment %}
+The one email layout.
+
+Tables and inline styles throughout, because Gmail strips <style> blocks and
+Outlook renders with Word. Nothing here loads a font, an image or a stylesheet:
+an email that only looks right once images are allowed is an email that looks
+broken to most people the first time they see it.
+
+The design's Material Symbols cannot come along — every major client drops icon
+fonts and inline SVG — so the icon badge keeps its shape and colour and carries
+a unicode mark instead.
+{% endcomment %}<!doctype html>
+<html lang="en">
+  <body style="margin:0;padding:0;background:#f2ede4;">
+    <!-- Shown in the inbox list beside the subject, then hidden. -->
+    <div style="display:none;max-height:0;overflow:hidden;opacity:0;">{{ preheader }}</div>
+
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
+           style="background:#f2ede4;padding:32px 16px;">
+      <tr>
+        <td align="center">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
+                 style="max-width:560px;">
+
+            <tr>
+              <td style="padding:0 4px 20px;">
+                <span style="font-family:Georgia,'Times New Roman',serif;font-size:21px;
+                             font-weight:700;letter-spacing:-0.02em;color:#1a1816;">NkenzaPay</span>
+              </td>
+            </tr>
+
+            <tr>
+              <td style="background:#faf7f2;border:1px solid #e8e0d4;border-radius:16px;
+                         padding:32px 30px;">
+
+                <table role="presentation" cellpadding="0" cellspacing="0">
+                  <tr>
+                    <td width="44" height="44" align="center" valign="middle"
+                        style="width:44px;height:44px;border-radius:22px;
+                               background:{{ badge_background|default:'#fff2eb' }};
+                               font-family:Helvetica,Arial,sans-serif;font-size:20px;
+                               line-height:44px;color:{{ badge_colour|default:'#c67139' }};">
+                      {{ badge|default:"•" }}
+                    </td>
+                  </tr>
+                </table>
+
+                <h1 style="margin:20px 0 0;font-family:Helvetica,Arial,sans-serif;
+                           font-size:22px;line-height:1.3;font-weight:700;
+                           letter-spacing:-0.02em;color:#1a1816;">{{ title }}</h1>
+
+                {% for paragraph in paragraphs %}
+                  <p style="margin:14px 0 0;font-family:Helvetica,Arial,sans-serif;
+                            font-size:15px;line-height:1.6;color:#3d3833;">{{ paragraph }}</p>
+                {% endfor %}
+
+                {% if action_url %}
+                  <table role="presentation" cellpadding="0" cellspacing="0" style="margin:26px 0 0;">
+                    <tr>
+                      <td align="center" bgcolor="#c67139" style="border-radius:999px;">
+                        <a href="{{ action_url }}"
+                           style="display:inline-block;padding:14px 30px;
+                                  font-family:Helvetica,Arial,sans-serif;font-size:15px;
+                                  font-weight:700;color:#ffffff;text-decoration:none;
+                                  border-radius:999px;">{{ action_label }}</a>
+                      </td>
+                    </tr>
+                  </table>
+
+                  <!-- A button is not a link everyone can click. Some clients
+                       flatten it, and some people paste rather than click. -->
+                  <p style="margin:18px 0 0;font-family:Helvetica,Arial,sans-serif;
+                            font-size:12.5px;line-height:1.5;color:#6f675c;">
+                    If the button does not work, paste this into your browser:<br>
+                    <span style="color:#8c491a;word-break:break-all;">{{ action_url }}</span>
+                  </p>
+                {% endif %}
+
+                {% if footnote %}
+                  <p style="margin:22px 0 0;padding:14px 16px;background:#f2ede4;
+                            border-radius:10px;font-family:Helvetica,Arial,sans-serif;
+                            font-size:12.5px;line-height:1.55;color:#6f675c;">{{ footnote }}</p>
+                {% endif %}
+              </td>
+            </tr>
+
+            <tr>
+              <td style="padding:22px 6px 0;font-family:Helvetica,Arial,sans-serif;
+                         font-size:12px;line-height:1.6;color:#8a8175;">
+                Sent by NkenzaPay. Ask us anything at
+                <a href="mailto:{{ support_email }}"
+                   style="color:#8c491a;text-decoration:none;">{{ support_email }}</a>.
+                <br>
+                We will never ask you for your password, or ask you to send money
+                to prove an account is yours.
+              </td>
+            </tr>
+
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>

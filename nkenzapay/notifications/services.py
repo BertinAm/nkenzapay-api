@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 
 from django.conf import settings
-from django.core.mail import send_mail
+from django.core.mail import EmailMultiAlternatives
 from django.utils import timezone
 
 from .models import DeliveryRule, Notification, NotificationPreference
@@ -89,13 +89,14 @@ CATALOGUE = {
 
 
 def notify(user, event, *, transaction=None, context=None, audience=None,
-           email_body=None):
+           email_body=None, email_action=None):
     """Create one notification and send its email if the rules ask for it.
 
-    `email_body` replaces the body in the email only. A reset link belongs in
-    the message sent to the address that asked for it, and nowhere else — not
-    in the bell, which anyone holding the session can read, and not in the row
-    stored against the account.
+    `email_body` replaces the body in the email only, and `email_action` adds
+    the button beneath it as {"label", "url", optional "footnote"}. A reset link
+    belongs in the message sent to the address that asked for it, and nowhere
+    else — not in the bell, which anyone holding the session can read, and not
+    in the row stored against the account.
     """
     entry = CATALOGUE.get(event)
     if entry is None:
@@ -128,7 +129,7 @@ def notify(user, event, *, transaction=None, context=None, audience=None,
     )
 
     if _should_email(user, event, audience, emails_by_default):
-        _send_email(notification, body=email_body)
+        _send_email(notification, body=email_body, action=email_action)
 
     _publish(notification)
     return notification
@@ -191,19 +192,71 @@ def _preference_group(event):
     return ""
 
 
-def _send_email(notification, body=None):
+# The badge at the top of the email. Its shape and colour come from the design;
+# the mark inside is unicode rather than a Material Symbol, because every major
+# client strips icon fonts and inline SVG. Falls back to the neutral dot.
+BADGES = {
+    "warn": ("!", "#fff2eb", "#c67139"),
+    "good": ("✓", "#f0fae1", "#56633f"),
+    "danger": ("!", "#fbe9e4", "#b2472e"),
+    "neutral": ("•", "#fff2eb", "#c67139"),
+}
+
+
+def _send_email(notification, body=None, action=None):
+    """Send one notification as text and as the branded HTML beside it.
+
+    Both parts carry the same words. A client that refuses HTML, or a person
+    who reads mail as plain text, sees the same message and the same link
+    rather than an apology for not being able to see it.
+    """
+    text = body or notification.body
+    recipient = notification.user.email
+
     try:
-        send_mail(
+        message = EmailMultiAlternatives(
             subject=notification.title,
-            message=body or notification.body,
+            body=_text_with_link(text, action),
             from_email=settings.DEFAULT_FROM_EMAIL,
-            recipient_list=[notification.user.email],
-            fail_silently=False,
+            to=[recipient],
         )
+        message.attach_alternative(_html(notification, text, action), "text/html")
+        message.send(fail_silently=False)
     except Exception as exc:  # noqa: BLE001 - email must never break a transfer
         logger.error("Could not email notification %s: %s", notification.pk, exc)
         return
     Notification.objects.filter(pk=notification.pk).update(emailed_at=timezone.now())
+
+
+def _text_with_link(text, action):
+    """The plain part. The link is spelled out, never hidden behind words."""
+    if not action:
+        return text
+    return "\n\n".join([text, f"{action['label']}:", action["url"]])
+
+
+def _html(notification, text, action):
+    from django.template.loader import render_to_string
+
+    from nkenzapay.pricing.models import PlatformSetting
+
+    mark, background, colour = BADGES.get(notification.tone, BADGES["neutral"])
+    company = PlatformSetting.get("company")
+
+    return render_to_string("email/base.html", {
+        "title": notification.title,
+        # Blank lines are paragraphs, so a body written for the plain part
+        # reads the same way in HTML without a second copy of the words.
+        "paragraphs": [block.strip() for block in text.split("\n\n") if block.strip()],
+        "preheader": text.split("\n")[0][:140],
+        "badge": mark,
+        "badge_background": background,
+        "badge_colour": colour,
+        "action_url": action["url"] if action else "",
+        "action_label": action["label"] if action else "",
+        "footnote": action.get("footnote", "") if action else "",
+        "support_email": company.get("support_email", "support@nkenzapay.com"),
+    })
 
 
 def _publish(notification):
