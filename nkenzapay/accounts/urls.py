@@ -19,6 +19,10 @@ me_patterns = [
     path("profile", views.MeProfileView.as_view(), name="me-profile"),
     path("photo/upload-url", views.ProfilePhotoUploadUrlView.as_view(), name="me-photo-url"),
     path("photo/commit", views.ProfilePhotoCommitView.as_view(), name="me-photo-commit"),
+    path("id-document/upload-url", views.IdDocumentUploadUrlView.as_view(),
+         name="me-id-url"),
+    path("id-document/commit", views.IdDocumentCommitView.as_view(),
+         name="me-id-commit"),
     path("stats", views.my_stats, name="me-stats"),
     path("login-activity", views.LoginActivityView.as_view(), name="me-login-activity"),
 ]

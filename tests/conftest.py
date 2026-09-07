@@ -48,7 +48,13 @@ def send_corridor(seeded):
 
 @pytest.fixture
 def customer(db):
-    from nkenzapay.accounts.models import User
+    """An approved customer, which is what most tests are about.
+
+    Transfers are refused until the desk has approved the account, so a
+    fixture that is only half set up would fail every test that opens one for
+    a reason those tests are not checking. Verification has its own tests.
+    """
+    from nkenzapay.accounts.models import Profile, User
 
     user = User.objects.create_user(email="john@example.com", password="a-long-password-1")
     profile = user.profile
@@ -58,7 +64,22 @@ def customer(db):
     profile.whatsapp_country_code = "+91"
     profile.whatsapp_number = "9876543210"
     profile.completed_at = timezone.now()
+    profile.photo_key = "profiles/1/face.jpg"
+    profile.id_document_key = "identity/1/passport.jpg"
+    profile.id_document_type = "passport"
+    profile.id_submitted_at = timezone.now()
+    profile.verification_state = Profile.APPROVED
+    profile.verified_at = timezone.now()
     profile.save()
+    return user
+
+
+@pytest.fixture
+def unverified_customer(db):
+    """Signed up, nothing submitted. Cannot open a transfer."""
+    from nkenzapay.accounts.models import User
+
+    user = User.objects.create_user(email="new@example.com", password="a-long-password-4")
     return user
 
 

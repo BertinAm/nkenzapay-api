@@ -79,6 +79,50 @@ class Profile(models.Model):
     completed_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
+    # --- Identity verification --------------------------------------------
+    #
+    # An account can be opened, look around and get a price without any of
+    # this. Opening a transfer cannot: money leaves the platform against a
+    # name, and the desk has to have seen the document that name came from.
+
+    UNVERIFIED = "unverified"
+    PENDING = "pending"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+
+    VERIFICATION_STATES = [
+        (UNVERIFIED, "Nothing submitted"),
+        (PENDING, "Waiting on the desk"),
+        (APPROVED, "Approved"),
+        (REJECTED, "Rejected"),
+    ]
+
+    DOCUMENT_TYPES = [
+        ("passport", "Passport"),
+        ("national_id", "National identity card"),
+        ("residence_permit", "Residence permit"),
+        ("drivers_licence", "Driving licence"),
+    ]
+
+    id_document_key = models.CharField(max_length=255, blank=True)
+    id_document_type = models.CharField(max_length=24, blank=True, choices=DOCUMENT_TYPES)
+    id_submitted_at = models.DateTimeField(null=True, blank=True)
+
+    verification_state = models.CharField(
+        max_length=12, default=UNVERIFIED, choices=VERIFICATION_STATES, db_index=True
+    )
+    verified_at = models.DateTimeField(null=True, blank=True)
+    verified_by = models.ForeignKey(User, null=True, blank=True,
+                                    on_delete=models.SET_NULL, related_name="+")
+    # Written for the customer to read: it goes into the email that tells them
+    # what to send again.
+    verification_note = models.TextField(blank=True)
+
+    # How many nudges have gone out, so the schedule can stop rather than
+    # emailing somebody weekly forever.
+    reminders_sent = models.PositiveSmallIntegerField(default=0)
+    last_reminder_at = models.DateTimeField(null=True, blank=True)
+
     IDENTITY_FIELDS = (
         "first_name",
         "middle_name",
@@ -104,6 +148,26 @@ class Profile(models.Model):
     @property
     def is_complete(self):
         return bool(self.first_name and self.last_name and self.whatsapp_number)
+
+    @property
+    def is_verified(self):
+        return self.verification_state == self.APPROVED
+
+    @property
+    def missing_steps(self):
+        """What the customer still has to do, in the order to ask for it.
+
+        Named rather than counted, because "2 steps left" tells somebody they
+        are not finished without telling them what to do about it.
+        """
+        steps = []
+        if not self.is_complete:
+            steps.append("details")
+        if not self.photo_key:
+            steps.append("photo")
+        if not self.id_document_key:
+            steps.append("id_document")
+        return steps
 
 
 class ProfileChangeLog(models.Model):

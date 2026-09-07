@@ -318,6 +318,141 @@ def test_enrolment_is_refused_once_it_is_done(api, desk, db):
     assert response.json()["error"]["code"] == "already_enrolled"
 
 
+def test_an_unapproved_account_cannot_open_a_transfer(api, unverified_customer,
+                                                     receive_corridor, configured_methods):
+    """Money leaves the platform against a name, so the desk has to have seen
+    the document that name came from before the first transfer, not after."""
+    from decimal import Decimal
+
+    from nkenzapay.pricing.engine import build_quote, persist_quote
+    from nkenzapay.transactions import services
+
+    result = build_quote(corridor=receive_corridor, direction="receive",
+                         send_amount=Decimal("100000"), user=unverified_customer)
+    quote = persist_quote(result, user=unverified_customer)
+
+    from nkenzapay.common.exceptions import DomainError
+    from nkenzapay.payments.models import PaymentMethod
+
+    method = PaymentMethod.objects.get(slug="mtn_momo")
+    with pytest.raises(DomainError) as raised:
+        services.create_transaction(
+            user=unverified_customer, quote=quote, collect_method=method
+        )
+
+    assert raised.value.code == "not_verified"
+    # Named steps, so the app can send them to the right one rather than
+    # showing the sentence and stopping.
+    assert "id_document" in raised.value.detail["missing"]
+
+
+def test_submitting_a_document_puts_the_account_in_the_queue(api, unverified_customer,
+                                                             settings, tmp_path):
+    from nkenzapay.accounts.models import Profile
+
+    profile = unverified_customer.profile
+    profile.id_document_key = "identity/9/passport.jpg"
+    profile.id_document_type = "passport"
+    profile.verification_state = Profile.PENDING
+    profile.save()
+
+    api.force_authenticate(unverified_customer)
+    body = api.get("/api/v1/me/profile").json()
+    assert body["verification_state"] == "pending"
+    assert body["is_verified"] is False
+    assert body["has_id_document"] is True
+
+
+def test_the_desk_approves_and_the_customer_is_told(api, desk, unverified_customer,
+                                                   mailoutbox):
+    from nkenzapay.accounts.models import Profile
+
+    profile = unverified_customer.profile
+    profile.id_document_key = "identity/9/passport.jpg"
+    profile.id_document_type = "passport"
+    profile.verification_state = Profile.PENDING
+    profile.save()
+
+    api.force_authenticate(desk)
+    response = api.post(f"/api/v1/admin/verifications/{profile.pk}/approve",
+                        {}, format="json")
+    assert response.status_code == 200, response.json()
+
+    profile.refresh_from_db()
+    assert profile.verification_state == Profile.APPROVED
+    assert profile.verified_by_id == desk.pk
+    assert any("approved" in message.subject.lower() for message in mailoutbox)
+
+
+def test_rejecting_without_a_reason_is_refused(api, desk, unverified_customer):
+    """The customer is about to be asked for another document and has to know
+    what was wrong with the first one."""
+    from nkenzapay.accounts.models import Profile
+
+    profile = unverified_customer.profile
+    profile.id_document_key = "identity/9/passport.jpg"
+    profile.verification_state = Profile.PENDING
+    profile.save()
+
+    api.force_authenticate(desk)
+    response = api.post(f"/api/v1/admin/verifications/{profile.pk}/reject",
+                        {"note": "   "}, format="json")
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "reason_required"
+
+
+def test_reminders_follow_the_schedule_and_then_stop(unverified_customer, mailoutbox):
+    """A day, three days, then weekly, then silence. Somebody who has ignored
+    four emails is not reading the fifth."""
+    from datetime import timedelta
+
+    from django.core.management import call_command
+    from django.utils import timezone
+
+    profile = unverified_customer.profile
+
+    # Too soon on the day they signed up.
+    call_command("send_verification_reminders")
+    profile.refresh_from_db()
+    assert profile.reminders_sent == 0
+
+    def wind_back(hours):
+        stamp = timezone.now() - timedelta(hours=hours)
+        type(profile).objects.filter(pk=profile.pk).update(
+            created_at=stamp, last_reminder_at=None if profile.reminders_sent == 0 else stamp
+        )
+        profile.refresh_from_db()
+
+    for expected in (1, 2, 3, 4):
+        wind_back(24 * 30)
+        call_command("send_verification_reminders")
+        profile.refresh_from_db()
+        assert profile.reminders_sent == expected, expected
+
+    # Four is the end of it, however long anybody waits.
+    wind_back(24 * 365)
+    call_command("send_verification_reminders")
+    profile.refresh_from_db()
+    assert profile.reminders_sent == 4
+    assert len(mailoutbox) == 4
+
+
+def test_an_approved_account_is_never_reminded(customer, mailoutbox):
+    from datetime import timedelta
+
+    from django.core.management import call_command
+    from django.utils import timezone
+
+    type(customer.profile).objects.filter(pk=customer.profile.pk).update(
+        created_at=timezone.now() - timedelta(days=90)
+    )
+    call_command("send_verification_reminders")
+
+    customer.profile.refresh_from_db()
+    assert customer.profile.reminders_sent == 0
+    assert mailoutbox == []
+
+
 def test_the_desk_area_is_closed_to_customers(signed_in, seeded):
     assert signed_in.get("/api/v1/admin/overview").status_code == 403
     assert signed_in.get("/api/v1/admin/users").status_code == 403

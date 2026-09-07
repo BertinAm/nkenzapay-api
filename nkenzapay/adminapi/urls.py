@@ -1,6 +1,6 @@
 from django.urls import include, path
 
-from . import twofactor, views
+from . import twofactor, verification, views
 
 urlpatterns = [
     path("overview", views.Overview.as_view()),
@@ -9,6 +9,11 @@ urlpatterns = [
     path("2fa", twofactor.TwoFactorStatus.as_view()),
     path("2fa/setup", twofactor.TwoFactorSetup.as_view()),
     path("2fa/confirm", twofactor.TwoFactorConfirm.as_view()),
+
+    path("verifications", verification.VerificationQueue.as_view()),
+    path("verifications/<int:pk>", verification.VerificationDetail.as_view()),
+    path("verifications/<int:pk>/<str:action>",
+         verification.VerificationDecide.as_view()),
 
     path("transactions", views.AdminTransactionList.as_view()),
     path("transactions/<str:reference>", views.AdminTransactionDetail.as_view()),

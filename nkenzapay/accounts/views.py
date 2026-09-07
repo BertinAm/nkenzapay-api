@@ -30,7 +30,12 @@ from .serializers import (
     RegisterSerializer,
     UserSerializer,
 )
-from .uploads import commit_profile_photo, profile_photo_upload_url
+from .uploads import (
+    commit_id_document,
+    commit_profile_photo,
+    id_document_upload_url,
+    profile_photo_upload_url,
+)
 
 
 class RegisterView(APIView):
@@ -202,6 +207,46 @@ class ProfilePhotoCommitView(APIView):
     def post(self, request):
         key = request.data.get("key", "")
         profile = commit_profile_photo(request.user, key)
+        return Response(ProfileSerializer(profile, context={"request": request}).data)
+
+
+class IdDocumentUploadUrlView(APIView):
+    permission_classes = [IsAuthenticated]
+    throttle_scope = "upload"
+
+    def post(self, request):
+        content_type = request.data.get("content_type", "image/jpeg")
+        size = int(request.data.get("size_bytes") or 0)
+        return Response(id_document_upload_url(request.user, content_type, size))
+
+
+class IdDocumentCommitView(APIView):
+    """Submit the document and join the queue."""
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        profile = commit_id_document(
+            request.user,
+            request.data.get("key", ""),
+            request.data.get("document_type", ""),
+        )
+
+        notifications.notify(
+            request.user, "account.id_submitted",
+            email_body=(
+                "Thanks. Your document is with the desk.\n\n"
+                "Someone checks it by hand, usually the same day. We will "
+                "email you either way."
+            ),
+        )
+        notifications.notify_desk("admin.id_submitted", context={
+            "customer": request.user.display_name,
+        })
+        audit.record(actor=request.user, action="account.id_submitted",
+                     summary=f"{request.user.email} submitted a {profile.id_document_type}",
+                     target=profile, request=request)
+
         return Response(ProfileSerializer(profile, context={"request": request}).data)
 
 

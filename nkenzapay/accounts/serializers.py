@@ -44,6 +44,11 @@ class ProfileSerializer(serializers.ModelSerializer):
         queryset=Country.objects.all(), allow_null=True, required=False
     )
     has_photo = serializers.SerializerMethodField()
+    has_id_document = serializers.SerializerMethodField()
+    is_verified = serializers.BooleanField(read_only=True)
+    # Named steps rather than a count: "2 left" tells somebody they are not
+    # finished without telling them what to do about it.
+    missing_steps = serializers.ListField(read_only=True)
 
     class Meta:
         model = Profile
@@ -51,11 +56,21 @@ class ProfileSerializer(serializers.ModelSerializer):
             "first_name", "middle_name", "last_name", "legal_name",
             "whatsapp_country_code", "whatsapp_number", "whatsapp_display",
             "country", "has_photo", "photo_taken_at", "is_complete", "completed_at",
+            "has_id_document", "id_document_type", "id_submitted_at",
+            "verification_state", "verified_at", "verification_note",
+            "is_verified", "missing_steps",
         ]
-        read_only_fields = ["photo_taken_at", "completed_at"]
+        read_only_fields = [
+            "photo_taken_at", "completed_at", "id_document_type",
+            "id_submitted_at", "verification_state", "verified_at",
+            "verification_note",
+        ]
 
     def get_has_photo(self, obj):
         return bool(obj.photo_key)
+
+    def get_has_id_document(self, obj):
+        return bool(obj.id_document_key)
 
     def validate_whatsapp_number(self, value):
         digits = PHONE_CLEAN.sub("", value or "")

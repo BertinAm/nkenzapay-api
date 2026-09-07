@@ -135,6 +135,20 @@ def create_transaction(*, user, quote, collect_method, recipient=None, request=N
             "account_suspended",
             "This account cannot create transfers. Contact the desk.",
         )
+
+    # Money leaves the platform against a name, so the desk has to have seen
+    # the document that name came from before the first transfer, not after.
+    profile = getattr(user, "profile", None)
+    if profile is None or not profile.is_verified:
+        raise DomainError(
+            "not_verified",
+            "Your account is not approved yet. Finish setting it up and the "
+            "desk will check your document, usually the same day.",
+            # Named so the front end can send them to the right step rather
+            # than showing this sentence and stopping.
+            detail={"missing": profile.missing_steps if profile else ["details"],
+                    "state": profile.verification_state if profile else "unverified"},
+        )
     if collect_method.country_id != quote.corridor.source_id or not collect_method.is_enabled:
         raise DomainError(
             "method_unavailable",
