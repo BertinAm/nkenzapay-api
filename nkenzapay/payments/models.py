@@ -103,7 +103,18 @@ class PaymentInstruction(models.Model):
 
     @property
     def summary(self):
-        values = [str(v) for v in self.ordered_fields().values() if v]
+        """The one-line preview in the admin list.
+
+        Dial strings are left out. They are stored with an {amount} in them and
+        only mean something once there is a transfer to price, so a preview
+        showing the placeholder reads as a half-finished setting rather than a
+        working one.
+        """
+        values = [
+            str(value)
+            for key, value in self.ordered_fields().items()
+            if value and not key.startswith("ussd_")
+        ]
         return " · ".join(values[:3])
 
     def ordered_fields(self):

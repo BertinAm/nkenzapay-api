@@ -561,7 +561,9 @@ class AdminUserList(generics.ListAPIView):
             queryset = queryset.filter(is_suspended=True)
         elif state == "active":
             queryset = queryset.filter(is_suspended=False)
-        return queryset
+        # User has no default ordering, and an unordered queryset paginates
+        # differently each time: page two can repeat what page one showed.
+        return queryset.order_by("-date_joined", "pk")
 
     def list(self, request, *args, **kwargs):
         response = super().list(request, *args, **kwargs)

@@ -4,7 +4,12 @@ from datetime import timedelta
 from urllib.parse import quote
 
 from django.conf import settings
-from django.contrib.auth import authenticate, login, logout
+from django.contrib.auth import (
+    authenticate,
+    login,
+    logout,
+    update_session_auth_hash,
+)
 from django.core.cache import cache
 from django.db.models import Count, Q, Sum
 from django.utils import timezone
@@ -265,6 +270,14 @@ class PasswordChangeView(APIView):
             raise DomainError("bad_password", "Your current password is not right.")
         request.user.set_password(form.validated_data["new_password"])
         request.user.save(update_fields=["password"])
+
+        # Signs out every other session, because they were all built on the old
+        # password. This one is carried across deliberately: whoever just typed
+        # the current password is the account holder, and throwing them out of
+        # the tab they did it in teaches nobody anything.
+        update_session_auth_hash(request, request.user)
+        retire_reset_tokens(request.user)
+
         audit.record(actor=request.user, action="account.password_changed",
                      summary=f"{request.user.email} changed their password",
                      target=request.user, request=request)
@@ -329,6 +342,16 @@ class PasswordResetConfirmView(APIView):
         password_validation.validate_password(new_password, record.user)
         record.user.set_password(new_password)
         record.user.save(update_fields=["password"])
+
+        # Every session that existed under the old password is already dead:
+        # Django compares each one against a hash derived from it. What is not
+        # automatic is the other links — ask for two resets, spend one, and the
+        # first email still works until it expires.
+        retire_reset_tokens(record.user, keep=record.pk)
+
+        audit.record(actor=record.user, action="account.password_reset_used",
+                     summary=f"{record.user.email} set a new password from a reset link",
+                     target=record.user, request=request)
         return Response({"reset": True})
 
 
@@ -385,6 +408,21 @@ def my_stats(request):
 
 
 # --- helpers -------------------------------------------------------------
+
+
+def retire_reset_tokens(user, keep=None):
+    """Spend every outstanding reset link for an account.
+
+    A customer who asks twice has two working links in their inbox. Once one of
+    them has set a password, the other is a spare key to an account that has
+    just been secured.
+    """
+    tokens = EmailToken.objects.filter(
+        user=user, purpose=EmailToken.PURPOSE_RESET, used_at__isnull=True
+    )
+    if keep is not None:
+        tokens = tokens.exclude(pk=keep)
+    return tokens.update(used_at=timezone.now())
 
 
 def reset_link(token):

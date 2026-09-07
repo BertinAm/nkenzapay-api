@@ -94,6 +94,18 @@ def desk(db):
 
 
 @pytest.fixture
+def owner(db):
+    """The role that may open settings as well as read the queue."""
+    from nkenzapay.accounts.models import AdminRole, AdminUser, User
+
+    user = User.objects.create_user(email="owner@nkenzapay.com",
+                                    password="a-long-password-4")
+    AdminUser.objects.create(user=user, role=AdminRole.OWNER,
+                             totp_confirmed_at=timezone.now())
+    return user
+
+
+@pytest.fixture
 def support_only(db):
     from nkenzapay.accounts.models import AdminRole, AdminUser, User
 

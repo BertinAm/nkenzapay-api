@@ -473,6 +473,62 @@ def test_the_desk_can_read_the_payment_methods(api, desk, seeded):
     assert "{amount}" in mtn["instruction"]["hints"]["ussd_personal"]
 
 
+def test_a_spare_reset_link_dies_with_the_one_that_was_used(api, customer, mailoutbox,
+                                                           settings):
+    """Ask twice and there are two working links in the inbox. Once one has set
+    a password, the other is a spare key to an account just secured."""
+    settings.SITE_URL = "https://nkenzapay.com"
+
+    api.post("/api/v1/auth/password/reset", {"email": customer.email}, format="json")
+    api.post("/api/v1/auth/password/reset", {"email": customer.email}, format="json")
+    first, second = (m.body.split("token=")[1].split()[0] for m in mailoutbox)
+
+    used = api.post("/api/v1/auth/password/reset/confirm",
+                    {"token": second, "new_password": "a-brand-new-password-1"},
+                    format="json")
+    assert used.status_code == 200
+
+    spare = api.post("/api/v1/auth/password/reset/confirm",
+                     {"token": first, "new_password": "another-password-99"},
+                     format="json")
+    assert spare.status_code == 400
+    assert spare.json()["error"]["code"] == "bad_token"
+
+
+def test_a_reset_signs_out_every_session_that_was_open(api, customer, mailoutbox,
+                                                       settings):
+    """The reason somebody resets is often that they think an account is taken.
+    A session opened under the old password must not survive it."""
+    settings.SITE_URL = "https://nkenzapay.com"
+
+    signed_in = APIClient()
+    assert signed_in.post("/api/v1/auth/login",
+                          {"email": customer.email, "password": "a-long-password-1"},
+                          format="json").status_code == 200
+    assert signed_in.get("/api/v1/auth/session").json()["user"] is not None
+
+    api.post("/api/v1/auth/password/reset", {"email": customer.email}, format="json")
+    token = mailoutbox[0].body.split("token=")[1].split()[0]
+    api.post("/api/v1/auth/password/reset/confirm",
+             {"token": token, "new_password": "a-brand-new-password-1"},
+             format="json")
+
+    # Same cookie, new password: Django checks each session against a hash
+    # derived from it, so the old one no longer resolves to anybody.
+    assert signed_in.get("/api/v1/auth/session").json()["user"] is None
+
+
+def test_signing_out_kills_the_cookie(api, customer):
+    signed_in = APIClient()
+    signed_in.post("/api/v1/auth/login",
+                   {"email": customer.email, "password": "a-long-password-1"},
+                   format="json")
+    assert signed_in.get("/api/v1/auth/session").json()["user"] is not None
+
+    signed_in.post("/api/v1/auth/logout")
+    assert signed_in.get("/api/v1/auth/session").json()["user"] is None
+
+
 def test_the_desk_area_is_closed_to_customers(signed_in, seeded):
     assert signed_in.get("/api/v1/admin/overview").status_code == 403
     assert signed_in.get("/api/v1/admin/users").status_code == 403
