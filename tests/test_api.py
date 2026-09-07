@@ -259,6 +259,65 @@ def test_a_reset_for_an_unknown_address_sends_nothing(api, db, mailoutbox):
     assert mailoutbox == []
 
 
+def test_a_desk_account_can_enrol_in_two_factor(api, desk, db):
+    """Every money-moving path checks totp_confirmed_at, and until this existed
+    nothing could set it: a seeded owner could read the whole desk and verify
+    nothing."""
+    from django_otp.oath import TOTP
+    from django_otp.plugins.otp_totp.models import TOTPDevice
+
+    from nkenzapay.accounts.models import AdminUser, User
+
+    AdminUser.objects.filter(user=desk).update(totp_confirmed_at=None)
+    # Re-read the user: the fixture's instance still holds the profile it was
+    # created with, and the view reads it off the authenticated user.
+    desk = User.objects.get(pk=desk.pk)
+
+    api.force_authenticate(desk)
+    assert api.get("/api/v1/admin/2fa").json()["enrolled"] is False
+
+    started = api.post("/api/v1/admin/2fa/setup", {}, format="json")
+    assert started.status_code == 200
+    assert started.json()["otpauth_url"].startswith("otpauth://totp/")
+    assert "<svg" in started.json()["qr_svg"]
+
+    device = TOTPDevice.objects.get(user=desk, confirmed=False)
+    totp = TOTP(device.bin_key, device.step, device.t0, device.digits)
+    code = str(totp.token()).zfill(device.digits)
+
+    done = api.post("/api/v1/admin/2fa/confirm", {"code": code}, format="json")
+    assert done.status_code == 200, done.json()
+
+    assert AdminUser.objects.get(user=desk).totp_confirmed_at is not None
+    assert TOTPDevice.objects.get(user=desk).confirmed is True
+
+
+def test_a_wrong_code_does_not_enrol(api, desk, db):
+    from nkenzapay.accounts.models import AdminUser, User
+
+    AdminUser.objects.filter(user=desk).update(totp_confirmed_at=None)
+    desk = User.objects.get(pk=desk.pk)
+
+    api.force_authenticate(desk)
+    assert api.post("/api/v1/admin/2fa/setup", {}, format="json").status_code == 200
+
+    response = api.post("/api/v1/admin/2fa/confirm", {"code": "000000"},
+                        format="json")
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "bad_code"
+
+    assert AdminUser.objects.get(user=desk).totp_confirmed_at is None
+
+
+def test_enrolment_is_refused_once_it_is_done(api, desk, db):
+    """Someone holding a stolen session must not be able to re-bind two-factor
+    to their own phone and lock the real owner out."""
+    api.force_authenticate(desk)
+    response = api.post("/api/v1/admin/2fa/setup", {}, format="json")
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "already_enrolled"
+
+
 def test_the_desk_area_is_closed_to_customers(signed_in, seeded):
     assert signed_in.get("/api/v1/admin/overview").status_code == 403
     assert signed_in.get("/api/v1/admin/users").status_code == 403

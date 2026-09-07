@@ -146,6 +146,10 @@ if DATABASES["default"]["ENGINE"].endswith("mysql"):
         "init_command": "SET sql_mode='STRICT_TRANS_TABLES', innodb_strict_mode=1",
     })
 
+# Shown as the account name in the authenticator app, so the desk can tell
+# this code apart from the others on their phone.
+OTP_TOTP_ISSUER = "NkenzaPay"
+
 AUTH_USER_MODEL = "accounts.User"
 
 # Argon2 first, per the security checklist.
