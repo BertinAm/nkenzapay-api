@@ -9,7 +9,7 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from nkenzapay.accounts.models import AdminUser, LoginActivity, User
+from nkenzapay.accounts.models import AdminUser, LoginActivity, Profile, User
 from nkenzapay.accounts.serializers import LoginActivitySerializer
 from nkenzapay.analytics.models import ExportJob, PageView
 from nkenzapay.audit import services as audit
@@ -232,6 +232,10 @@ class Badges(APIView):
                 user=request.user, audience=Notification.ADMIN, read_at__isnull=True
             ).count(),
             "disputes": Dispute.objects.filter(state=Dispute.OPEN).count(),
+            # Accounts that cannot move a penny until somebody looks at them.
+            "verifications": Profile.objects.filter(
+                verification_state=Profile.PENDING
+            ).count(),
             # Only what is worth waking up for. Every scanner on the internet
             # produces low-severity noise, and a badge that is never zero is a
             # badge nobody looks at.

@@ -9,6 +9,7 @@ The document is served through a short-lived signed URL like every other private
 file, so a screenshot of this screen does not carry a working link to a
 customer's passport.
 """
+from django.conf import settings
 from django.utils import timezone
 from rest_framework import generics
 from rest_framework.response import Response
@@ -120,6 +121,10 @@ class VerificationDecide(APIView):
                 "Every transfer opens its own chat with the desk, so there is "
                 "always someone to ask."
             ),
+            email_action={
+                "label": "Start a transfer",
+                "url": f"{settings.SITE_URL}/dashboard",
+            },
         )
         audit.record(
             actor=request.user, action="verification.approved",
@@ -158,6 +163,10 @@ class VerificationDecide(APIView):
                 f"{note}\n\n"
                 "Send another one and the desk will look again."
             ),
+            email_action={
+                "label": "Send another document",
+                "url": f"{settings.SITE_URL}/verify-identity",
+            },
         )
         audit.record(
             actor=request.user, action="verification.rejected",

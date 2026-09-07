@@ -239,6 +239,10 @@ class IdDocumentCommitView(APIView):
                 "Someone checks it by hand, usually the same day. We will "
                 "email you either way."
             ),
+            email_action={
+                "label": "See where you are",
+                "url": f"{settings.SITE_URL}/verify-identity",
+            },
         )
         notifications.notify_desk("admin.id_submitted", context={
             "customer": request.user.display_name,
