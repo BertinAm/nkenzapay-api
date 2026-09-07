@@ -453,6 +453,26 @@ def test_an_approved_account_is_never_reminded(customer, mailoutbox):
     assert mailoutbox == []
 
 
+def test_the_desk_can_read_the_payment_methods(api, desk, seeded):
+    """This endpoint 500d in production because the serializer declared a field
+    called `fields`, which is the name of the machinery that builds every other
+    field on it. Nothing was calling it in a test."""
+    api.force_authenticate(desk)
+    response = api.get("/api/v1/admin/payment-methods")
+    assert response.status_code == 200, response.content[:400]
+
+    rows = {row["slug"]: row for row in response.json()}
+    mtn = rows["mtn_momo"]
+
+    # Every key the method expects, filled or not, so a field set that grew
+    # after the row was written still shows its new boxes.
+    assert set(mtn["instruction"]["fields"]) == {
+        "number", "account_name", "ussd_personal", "ussd_business",
+    }
+    assert mtn["instruction"]["labels"]["ussd_personal"] == "Dial this"
+    assert "{amount}" in mtn["instruction"]["hints"]["ussd_personal"]
+
+
 def test_the_desk_area_is_closed_to_customers(signed_in, seeded):
     assert signed_in.get("/api/v1/admin/overview").status_code == 403
     assert signed_in.get("/api/v1/admin/users").status_code == 403

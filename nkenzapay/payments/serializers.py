@@ -35,7 +35,6 @@ class PaymentInstructionSerializer(serializers.ModelSerializer):
     """The full detail, for a participant in a transaction."""
 
     rows = serializers.SerializerMethodField()
-    fields = serializers.SerializerMethodField()
     labels = serializers.SerializerMethodField()
     hints = serializers.SerializerMethodField()
 
@@ -47,18 +46,6 @@ class PaymentInstructionSerializer(serializers.ModelSerializer):
     def get_rows(self, obj):
         return obj.rows_for_chat(self.context.get("transaction"))
 
-    def get_fields_data(self, obj):
-        return obj.ordered_fields()
-
-    def get_fields(self, obj):
-        """Every key the method expects, not only the ones already filled in.
-
-        A method whose field set grew after its row was written would otherwise
-        never show the new boxes in the admin, and nobody would know they were
-        missing until a customer was told to pay into nothing.
-        """
-        return obj.ordered_fields()
-
     def get_labels(self, obj):
         return {key: PaymentInstruction.LABELS.get(key, key.replace("_", " ").title())
                 for key in obj.ordered_fields()}
@@ -66,6 +53,21 @@ class PaymentInstructionSerializer(serializers.ModelSerializer):
     def get_hints(self, obj):
         return {key: PaymentInstruction.HINTS.get(key, "")
                 for key in obj.ordered_fields()}
+
+    def to_representation(self, instance):
+        """Send every key the method expects, not only the ones already filled.
+
+        A field set that grew after its row was written would otherwise never
+        show its new boxes in the admin, and nobody would find out until a
+        customer was told to pay into nothing.
+
+        Done here rather than as a field named `fields`: that name belongs to
+        the serializer itself, and declaring one shadows the machinery that
+        builds every other field on it.
+        """
+        data = super().to_representation(instance)
+        data["fields"] = instance.ordered_fields()
+        return data
 
 
 class AdminPaymentMethodSerializer(serializers.ModelSerializer):
