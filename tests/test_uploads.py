@@ -165,6 +165,33 @@ def test_a_signed_read_link_resolves_too(disk, client):
     assert b"".join(response.streaming_content) == BODY
 
 
+def test_a_read_link_lasts_as_long_as_it_was_issued_for(disk, settings):
+    """Five minutes has to mean five minutes.
+
+    presign_get took a ttl and dropped it, so the endpoint fell back to the
+    global sixty seconds for every link. The desk screen offers five minutes,
+    so that somebody has time to actually read a passport, and got one.
+    """
+    import time
+    from unittest import mock
+
+    settings.SIGNED_URL_TTL_SECONDS = 60
+    # Split on the prefix, not on the last slash: a read token carries the key,
+    # and a key is a path.
+    prefix = "/api/v1/uploads/local/"
+    long_link = disk.presign_get(KEY, ttl=300).split(prefix, 1)[1]
+    default_link = disk.presign_get(KEY).split(prefix, 1)[1]
+
+    assert disk.verify_signed_key(long_link) == KEY
+    assert disk.verify_signed_key(default_link) == KEY
+
+    # Two minutes on: the five-minute link still opens, the default one does not.
+    later = time.time() + 120
+    with mock.patch.object(time, "time", lambda: later):
+        assert disk.verify_signed_key(long_link) == KEY
+        assert disk.verify_signed_key(default_link) is None
+
+
 def test_a_read_link_cannot_be_used_to_write(disk, client):
     """The link that shows somebody their own photo must not replace it.
 

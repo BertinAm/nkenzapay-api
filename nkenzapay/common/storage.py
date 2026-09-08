@@ -138,14 +138,45 @@ Require all denied
         }
 
     def presign_get(self, key, ttl=None):
-        return f"/api/v1/uploads/local/{self.signer.sign(key)}"
+        # The lifetime rides along inside the token. It used to be dropped on
+        # the floor here, and the endpoint fell back to SIGNED_URL_TTL_SECONDS
+        # for everything: a link the desk was told lasts five minutes, so that
+        # somebody has time to actually read a passport, stopped working after
+        # sixty seconds.
+        #
+        # Separated by a tilde, which RFC 3986 lists as unreserved: it reaches
+        # the endpoint as itself, through a browser and through Cloudflare,
+        # without being percent-encoded on the way and decoded back by someone
+        # else. A pipe would have needed all three to agree.
+        lifetime = int(ttl or settings.SIGNED_URL_TTL_SECONDS)
+        return f"/api/v1/uploads/local/{self.signer.sign(f'{key}~{lifetime}')}"
 
     def verify_signed_key(self, signed, ttl=None):
-        ttl = ttl or settings.SIGNED_URL_TTL_SECONDS
+        """The key a read link points at, or None once it is no longer good.
+
+        Verified twice: the signature first, which is what lets the lifetime
+        inside be trusted, and then the age against that lifetime. There is no
+        way round the two passes — the age it must be checked against is
+        written inside the thing being checked.
+        """
         try:
-            return self.signer.unsign(signed, max_age=ttl)
+            payload = self.signer.unsign(signed)
         except BadSignature:
             return None
+
+        key, _, lifetime = payload.rpartition("~")
+        if not key:
+            # A key on its own: a link issued before the lifetime travelled
+            # with it. The caller's own default decides.
+            key = payload
+        max_age = int(lifetime) if lifetime.isdigit() else (
+            ttl or settings.SIGNED_URL_TTL_SECONDS
+        )
+        try:
+            self.signer.unsign(signed, max_age=max_age)
+        except BadSignature:
+            return None
+        return key
 
     def verify_upload_token(self, signed, ttl=600):
         """Unpack a write grant into (key, content type, ceiling in bytes).
