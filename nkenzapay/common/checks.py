@@ -202,7 +202,31 @@ def check_mail_can_actually_be_sent(app_configs, **kwargs):
     line nobody reads — while the customer waits for a password reset that is
     never coming.
     """
-    if "smtp" not in settings.EMAIL_BACKEND:
+    backend = settings.EMAIL_BACKEND
+
+    # The check used to return here for every non-SMTP backend, which meant a
+    # production deployment left on the console backend passed this clean. It
+    # is the worst case, not an exempt one: sign-up succeeds, the welcome and
+    # the confirmation link are written to a log file, and nothing anywhere
+    # says the customer got nothing.
+    if any(kind in backend for kind in ("console", "dummy", "locmem")):
+        return [
+            Error(
+                "Email is configured to go nowhere.",
+                hint=(
+                    f"EMAIL_BACKEND is {backend}, which writes messages to the "
+                    "log, discards them or keeps them in memory. Welcome "
+                    "messages, address confirmations and password reset links "
+                    "are all being generated and thrown away. Set "
+                    "EMAIL_BACKEND=django.core.mail.backends.smtp.EmailBackend "
+                    "in .env. Check it end to end with: manage.py mail_check "
+                    "you@example.com"
+                ),
+                id="nkenzapay.E015",
+            )
+        ]
+
+    if "smtp" not in backend:
         return []
 
     problems = []

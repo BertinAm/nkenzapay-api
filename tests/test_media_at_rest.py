@@ -381,13 +381,24 @@ def test_the_deploy_check_refuses_tls_and_ssl_together(settings):
     ]
 
 
-def test_the_console_backend_is_left_alone(settings):
-    """Nothing to warn about when mail is only being printed."""
+def test_the_deploy_check_catches_mail_going_nowhere(settings):
+    """A backend that prints or discards is the worst case, not an exempt one.
+
+    This check used to return early for every non-SMTP backend, on the reasoning
+    that there is nothing to warn about when mail is only being printed. That is
+    true while developing and false the moment it ships: sign-up succeeds, the
+    welcome and the confirmation link go to a log file, and nothing anywhere
+    says the customer got nothing. It is a deploy check, so it only speaks when
+    asked about a deployment.
+    """
     from nkenzapay.common.checks import check_mail_can_actually_be_sent
 
-    settings.EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
     settings.EMAIL_HOST = ""
-    assert check_mail_can_actually_be_sent(None) == []
+    for backend in ("console", "dummy", "locmem"):
+        settings.EMAIL_BACKEND = f"django.core.mail.backends.{backend}.EmailBackend"
+        assert [p.id for p in check_mail_can_actually_be_sent(None)] == [
+            "nkenzapay.E015"
+        ], f"the {backend} backend should be reported"
 
 
 def test_the_deploy_check_refuses_one_key_doing_two_jobs(settings):

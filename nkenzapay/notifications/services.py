@@ -239,7 +239,15 @@ def _send_email(notification, body=None, action=None):
         message.attach_alternative(_html(notification, text, action), "text/html")
         message.send(fail_silently=False)
     except Exception as exc:  # noqa: BLE001 - email must never break a transfer
-        logger.error("Could not email notification %s: %s", notification.pk, exc)
+        # With the traceback, and naming the event and the address. Without
+        # those this line says something failed and nothing about what, which
+        # is no use at all when the symptom is "sign-up worked and no email
+        # came". manage.py mail_check reproduces it on demand.
+        logger.error(
+            "Could not email %s to %s (notification %s): %s",
+            notification.event, recipient, notification.pk, exc,
+            exc_info=True,
+        )
         return
     Notification.objects.filter(pk=notification.pk).update(emailed_at=timezone.now())
 
