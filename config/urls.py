@@ -1,4 +1,4 @@
-from django.contrib import admin
+﻿from django.contrib import admin
 from django.urls import include, path
 
 from nkenzapay.accounts.urls import auth_patterns, me_patterns
@@ -30,7 +30,11 @@ api_v1 = [
     path("legal/<slug:slug>", content_views.LegalDocumentView.as_view()),
     path("support/report", content_views.SupportReport.as_view()),
     path("attachments/<int:pk>/url", AttachmentUrl.as_view()),
-    path("uploads/local/<str:signed>", LocalUploadView.as_view()),
+    # <path:> and not <str:>. A signed storage token carries the key, and a key
+    # is a directory path: "profiles/7/2026/09/<hash>.jpg:<stamp>:<sig>". The
+    # str converter stops at the first slash, so every upload and every signed
+    # read 404ed before reaching the view.
+    path("uploads/local/<path:signed>", LocalUploadView.as_view()),
     path("admin/", include("nkenzapay.adminapi.urls")),
 ]
 

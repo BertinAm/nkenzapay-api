@@ -88,6 +88,11 @@ Require all denied
     def __init__(self, root=None):
         self.root = Path(root or settings.MEDIA_ROOT)
         self.signer = TimestampSigner(salt="nkenzapay.storage")
+        # Writes are signed with a salt of their own. With one signer for both
+        # directions the sixty-second link that shows somebody their payment
+        # proof was also a link that could overwrite it, because the two URLs
+        # were byte-for-byte the same string.
+        self.upload_signer = TimestampSigner(salt="nkenzapay.storage.upload")
         self._prepared = False
 
     def prepare_root(self):
@@ -114,9 +119,18 @@ Require all denied
         return target
 
     def presign_put(self, key, content_type, max_bytes):
+        # The type and the ceiling are signed alongside the key, so the endpoint
+        # can enforce the same grant that was issued. Sending max_bytes to the
+        # client and trusting it to stop there is not a limit; it is a request.
+        #
+        # Encoded before signing so the token is base64url and colons and
+        # nothing else. A key and a MIME type both carry slashes, and the pieces
+        # between them would need a separator that survives a browser, a CDN and
+        # a proxy without being re-encoded on the way.
+        token = self.upload_signer.sign(_pack(key, content_type, int(max_bytes)))
         return {
             "method": "PUT",
-            "url": f"/api/v1/uploads/local/{self.signer.sign(key)}",
+            "url": f"/api/v1/uploads/local/{token}",
             "headers": {"Content-Type": content_type},
             "key": key,
             "max_bytes": max_bytes,
@@ -132,6 +146,18 @@ Require all denied
             return self.signer.unsign(signed, max_age=ttl)
         except BadSignature:
             return None
+
+    def verify_upload_token(self, signed, ttl=600):
+        """Unpack a write grant into (key, content type, ceiling in bytes).
+
+        Returns None for anything that does not verify, rather than raising, so
+        a caller cannot forget to handle a bad token and still get a key.
+        """
+        try:
+            payload = self.upload_signer.unsign(signed, max_age=ttl)
+        except BadSignature:
+            return None
+        return _unpack(payload)
 
     def save_bytes(self, key, data, content_type=""):
         self.prepare_root()
@@ -181,6 +207,29 @@ Require all denied
             if path.name == ".htaccess" or path.name.endswith(".part"):
                 continue
             yield path.relative_to(root).as_posix()
+
+
+def _pack(key: str, content_type: str, max_bytes: int) -> str:
+    """The three things a write grant allows, as one base64url word."""
+    raw = "\n".join([key, content_type, str(max_bytes)]).encode()
+    return base64.urlsafe_b64encode(raw).decode().rstrip("=")
+
+
+def _unpack(payload: str):
+    """The reverse, or None for anything malformed."""
+    padded = payload + "=" * (-len(payload) % 4)
+    try:
+        raw = base64.urlsafe_b64decode(padded.encode()).decode()
+    except (ValueError, UnicodeDecodeError):
+        return None
+
+    parts = raw.split("\n")
+    if len(parts) != 3:
+        return None
+    key, content_type, ceiling = parts
+    if not key or not content_type or not ceiling.isdigit() or int(ceiling) <= 0:
+        return None
+    return key, content_type, int(ceiling)
 
 
 def _restrict(path, mode):

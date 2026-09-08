@@ -123,3 +123,115 @@ def test_a_storage_key_cannot_escape_the_media_root():
 
     with pytest.raises(ValueError):
         LocalStorage().path_for("../../etc/passwd")
+
+
+# --- the endpoint that does the writing ------------------------------------
+#
+# Everything above tests the rules. These test the write, through the URL a
+# browser actually calls, because the rules were never reached: the route used
+# a path converter that stops at the first slash, and a storage key is a
+# directory path, so every upload in production 404ed before any view ran.
+
+BODY = b"\xff\xd8\xff\xe0" + b"\x00" * 500
+KEY = "profiles/7/2026/09/abcdef.jpg"
+
+
+@pytest.fixture
+def disk(tmp_path, settings):
+    """A media root of this test's own, with the singleton pointed at it."""
+    from nkenzapay.common import storage as storage_module
+
+    settings.MEDIA_ROOT = tmp_path / "private-media"
+    storage_module._backend = None
+    yield storage_module.storage()
+    storage_module._backend = None
+
+
+def test_an_upload_url_resolves_and_the_file_lands(disk, client):
+    grant = disk.presign_put(KEY, "image/jpeg", len(BODY))
+
+    response = client.put(grant["url"], data=BODY, content_type="image/jpeg")
+
+    assert response.status_code == 201
+    assert disk.read_bytes(KEY) == BODY
+
+
+def test_a_signed_read_link_resolves_too(disk, client):
+    disk.save_bytes(KEY, BODY, "image/jpeg")
+
+    response = client.get(disk.presign_get(KEY))
+
+    assert response.status_code == 200
+    assert b"".join(response.streaming_content) == BODY
+
+
+def test_a_read_link_cannot_be_used_to_write(disk, client):
+    """The link that shows somebody their own photo must not replace it.
+
+    Both directions were signed with the same salt, so the sixty-second URL
+    handed out to view a payment proof was, character for character, a URL that
+    could overwrite it.
+    """
+    disk.save_bytes(KEY, BODY, "image/jpeg")
+
+    response = client.put(disk.presign_get(KEY), data=b"\xff\xd8\xff replaced",
+                          content_type="image/jpeg")
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "bad_upload_url"
+    assert disk.read_bytes(KEY) == BODY
+
+
+def test_an_upload_past_its_ceiling_is_refused(disk, client):
+    grant = disk.presign_put(KEY, "image/jpeg", 100)
+
+    response = client.put(grant["url"], data=BODY, content_type="image/jpeg")
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "file_too_large"
+    assert not disk.path_for(KEY).exists()
+
+
+def test_bytes_that_contradict_the_granted_type_are_refused(disk, client):
+    """The grant said PNG. A header saying so does not make it one."""
+    grant = disk.presign_put("profiles/7/2026/09/x.png", "image/png", len(EXE))
+
+    response = client.put(grant["url"], data=EXE, content_type="image/png")
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "executable_rejected"
+    assert not disk.path_for("profiles/7/2026/09/x.png").exists()
+
+
+def test_an_empty_upload_is_refused(disk, client):
+    grant = disk.presign_put(KEY, "image/jpeg", 1000)
+
+    response = client.put(grant["url"], data=b"", content_type="image/jpeg")
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "empty_file"
+
+
+def test_the_grant_is_inside_the_signature(disk):
+    """The type and the ceiling are signed, not carried beside the signature."""
+    grant = disk.presign_put(KEY, "image/jpeg", 100)
+    token = grant["url"].rsplit("/", 1)[1]
+
+    assert disk.verify_upload_token(token) == (KEY, "image/jpeg", 100)
+    assert disk.verify_upload_token(token, ttl=-1) is None
+
+    # Re-pack the same key with a bigger ceiling and a type of one's choosing.
+    # Without the signing key it does not verify, which is the whole point.
+    from nkenzapay.common.storage import _pack
+
+    forged = _pack(KEY, "application/pdf", 500 * 1024 * 1024)
+    assert disk.verify_upload_token(f"{forged}:1x0000:notarealsignature") is None
+
+
+def test_an_upload_token_is_url_safe(disk):
+    """No character in the token needs encoding by a browser, CDN or proxy."""
+    import re
+
+    token = disk.presign_put(KEY, "image/jpeg", 100)["url"].rsplit("/", 1)[1]
+
+    assert re.fullmatch(r"[A-Za-z0-9_\-:]+", token)

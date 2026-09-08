@@ -303,26 +303,75 @@ class ReceiptPdfView(APIView):
 
 
 class LocalUploadView(APIView):
-    """Development storage endpoint.
+    """Private storage's own endpoint.
 
-    Signed both ways: a PUT accepts one upload for one key, a GET serves it for
-    sixty seconds. In production the same calls are answered by object storage
-    and this view is never reached.
+    Signed both ways, with a salt for each direction: a PUT accepts one upload
+    for one key, a GET serves it for sixty seconds. Where object storage is on
+    the table this view is never reached; on shared hosting, where it is not,
+    this is the write path for every payment proof and every photograph.
+
+    The signature is the entire credential, so there is no session to
+    authenticate. Leaving session auth on would also have meant a CSRF check on
+    a PUT whose body is raw image bytes — a second way for an upload to fail
+    that has nothing to do with whether the upload was allowed.
     """
 
     permission_classes = [AllowAny]
+    authentication_classes = []
+
+    # Read in pieces so a body past the ceiling is refused while it arrives,
+    # rather than after the whole thing is in memory.
+    CHUNK = 64 * 1024
 
     def put(self, request, signed):
         from nkenzapay.common.storage import LocalStorage, storage
+        from nkenzapay.common.uploads import validate_bytes
 
         backend = storage()
         if not isinstance(backend, LocalStorage):
             raise Http404
-        key = backend.verify_signed_key(signed, ttl=600)
-        if key is None:
+        grant = backend.verify_upload_token(signed, ttl=600)
+        if grant is None:
             raise DomainError("bad_upload_url", "That upload link has expired.")
-        backend.save_bytes(key, request.body, request.content_type or "")
+        key, content_type, max_bytes = grant
+
+        data = self._read_within(request, max_bytes)
+        if not data:
+            raise DomainError("empty_file", "That file appears to be empty.")
+
+        # The type was settled when the link was issued, and the bytes have to
+        # back it up. The Content-Type header is not consulted: a header is a
+        # claim the sender writes, a magic number is not.
+        validate_bytes(data, content_type)
+
+        backend.save_bytes(key, data, content_type)
         return Response({"key": key}, status=status.HTTP_201_CREATED)
+
+    def _read_within(self, request, max_bytes):
+        """The body, or a refusal as soon as it runs past what was granted."""
+        too_large = DomainError(
+            "file_too_large",
+            "That file is bigger than this upload allows. Choose a smaller one.",
+            {"limit_bytes": max_bytes},
+        )
+
+        # Content-Length is a claim too, but an honest client's claim lets us
+        # refuse before reading a byte.
+        declared = request.META.get("CONTENT_LENGTH") or ""
+        if declared.isdigit() and int(declared) > max_bytes:
+            raise too_large
+
+        chunks, total = [], 0
+        while True:
+            chunk = request.read(self.CHUNK)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > max_bytes:
+                # Stop reading. Nothing has reached the disk.
+                raise too_large
+            chunks.append(chunk)
+        return b"".join(chunks)
 
     def get(self, request, signed):
         from nkenzapay.common.storage import LocalStorage, storage
