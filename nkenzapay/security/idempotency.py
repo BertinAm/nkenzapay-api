@@ -31,9 +31,31 @@ MAX_KEY_LENGTH = 200
 
 
 def fingerprint(request) -> str:
-    """Hash the body so the same key cannot carry different content."""
-    body = request.body or b""
-    return hashlib.sha256(body).hexdigest()
+    """Hash the parsed body so the same key cannot carry different content.
+
+    The parsed body rather than the raw stream, and it has to be. By the time a
+    decorated view runs, DRF has usually read the stream already: session
+    authentication runs first, and its CSRF check reads request.POST looking for
+    a token, which on a DRF request parses the body. Asking for request.body
+    afterwards raises RawPostDataException — "You cannot access body after
+    reading from request's data stream" — and every idempotent POST from a
+    browser became a 500.
+
+    It never showed in a test because the tests authenticate with
+    force_authenticate, which sets the user directly and never runs session
+    authentication, so the stream was still unread and request.body worked. The
+    one path that mattered was the one nothing exercised.
+
+    Sorted keys so the same payload hashes the same way whatever order the
+    client sent it in. Values that will not serialise fall back to their text,
+    which for an uploaded file is its name.
+    """
+    payload = getattr(request, "data", None)
+    try:
+        canonical = json.dumps(payload, sort_keys=True, default=str)
+    except (TypeError, ValueError):
+        canonical = repr(payload)
+    return hashlib.sha256(canonical.encode()).hexdigest()
 
 
 def candidate_scopes(request) -> list[str]:
