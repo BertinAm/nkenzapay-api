@@ -162,7 +162,25 @@ def test_a_signed_read_link_resolves_too(disk, client):
     response = client.get(disk.presign_get(KEY))
 
     assert response.status_code == 200
-    assert b"".join(response.streaming_content) == BODY
+    assert response.content == BODY
+
+
+def test_a_served_file_is_not_handed_over_as_a_file_object(disk, client):
+    """Bytes in the body, not a file for the WSGI server to wrap.
+
+    This was a FileResponse over a BytesIO. Django hands that object to
+    wsgi.file_wrapper where the server offers one, and Passenger's asks it for a
+    fileno(), which a BytesIO does not have. It failed after Django had returned
+    the response — past every handler Django owns — so production answered with
+    the web server's own 500 page and the application log stayed empty.
+    """
+    disk.save_bytes(KEY, BODY, "image/jpeg")
+
+    response = client.get(disk.presign_get(KEY))
+
+    assert not response.streaming
+    assert not hasattr(response, "file_to_stream")
+    assert response["Content-Type"] == "image/jpeg"
 
 
 def test_a_read_link_lasts_as_long_as_it_was_issued_for(disk, settings):

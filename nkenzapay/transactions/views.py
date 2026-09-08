@@ -1,5 +1,5 @@
 from django.db.models import Prefetch
-from django.http import FileResponse, Http404
+from django.http import Http404, HttpResponse
 from rest_framework import generics, status
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
@@ -296,10 +296,17 @@ class ReceiptPdfView(APIView):
         if receipt is None:
             raise DomainError("no_receipt", "A receipt exists once the transfer completes.")
 
-        buffer = render_pdf(receipt)
-        return FileResponse(buffer, as_attachment=True,
-                            filename=f"NkenzaPay-{txn.reference}.pdf",
-                            content_type="application/pdf")
+        # HttpResponse over the rendered bytes, not FileResponse over the
+        # buffer. Same reason as the upload view below: Passenger's
+        # wsgi.file_wrapper asks the object for a fileno() and a BytesIO has
+        # none, which takes the process down past Django's error handling.
+        response = HttpResponse(
+            render_pdf(receipt).getvalue(), content_type="application/pdf"
+        )
+        response["Content-Disposition"] = (
+            f'attachment; filename="NkenzaPay-{txn.reference}.pdf"'
+        )
+        return response
 
 
 class LocalUploadView(APIView):
@@ -396,11 +403,18 @@ class LocalUploadView(APIView):
                 {"key_missing": True},
             ) from exc
 
-        import io
         import mimetypes
 
         content_type = mimetypes.guess_type(key)[0] or "application/octet-stream"
-        response = FileResponse(io.BytesIO(data), content_type=content_type)
+        # HttpResponse, not FileResponse. The bytes are already whole and in
+        # memory — they had to be, to be decrypted — so there is nothing to
+        # stream, and FileResponse hands its file object to the WSGI server's
+        # wsgi.file_wrapper. Passenger's expects a real file and asks it for a
+        # fileno(); a BytesIO has none, so it raised after Django had already
+        # returned, past every exception handler Django owns. Which is why this
+        # came back as the web server's own 500 page and left nothing useful in
+        # the application log.
+        response = HttpResponse(data, content_type=content_type)
 
         # An identity photograph must not sit in a shared cache, a proxy, or
         # the browser's disk cache after the one-minute link has expired.

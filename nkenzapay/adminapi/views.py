@@ -1324,8 +1324,7 @@ class ExportDetail(generics.RetrieveAPIView):
 @api_view(["GET"])
 @permission_classes([IsDesk])
 def export_download(request, pk):
-    from django.http import FileResponse, Http404
-    import io
+    from django.http import Http404, HttpResponse
 
     from nkenzapay.common.storage import storage
 
@@ -1336,8 +1335,22 @@ def export_download(request, pk):
         data = storage().read_bytes(job.storage_key)
     except (FileNotFoundError, OSError) as exc:
         raise Http404 from exc
-    extension = "xlsx" if job.fmt == "excel" else "csv"
-    return FileResponse(
-        io.BytesIO(data), as_attachment=True,
-        filename=f"nkenzapay-export-{job.pk}.{extension}",
+
+    excel = job.fmt == "excel"
+    extension = "xlsx" if excel else "csv"
+    # HttpResponse rather than FileResponse over a BytesIO. See the note in
+    # transactions/views.py: Passenger's wsgi.file_wrapper wants a real file and
+    # a BytesIO has no fileno(), which fails after Django has handed the
+    # response back and surfaces as the web server's 500 rather than ours.
+    response = HttpResponse(
+        data,
+        content_type=(
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            if excel
+            else "text/csv"
+        ),
     )
+    response["Content-Disposition"] = (
+        f'attachment; filename="nkenzapay-export-{job.pk}.{extension}"'
+    )
+    return response
