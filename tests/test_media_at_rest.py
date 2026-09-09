@@ -401,6 +401,53 @@ def test_the_deploy_check_catches_mail_going_nowhere(settings):
         ], f"the {backend} backend should be reported"
 
 
+def test_the_deploy_check_catches_transfers_priced_from_the_mock_table(db, settings):
+    """The quietest way this platform could take money against a made-up rate.
+
+    Nothing on the site looks different when the mock provider is live: quotes
+    are given, fees are taken from them and payouts are promised, all off a table
+    typed into a source file.
+    """
+    from nkenzapay.common.checks import check_the_rates_are_real
+    from nkenzapay.rates.models import RateProvider
+
+    RateProvider.objects.create(slug="mock", label="Development rates",
+                                is_active=True)
+    assert [p.id for p in check_the_rates_are_real(None)] == ["nkenzapay.E017"]
+
+
+def test_the_deploy_check_wants_credentials_for_a_live_provider(db, settings):
+    from nkenzapay.common.checks import check_the_rates_are_real
+    from nkenzapay.rates.models import RateProvider
+
+    # Nothing switched on at all: every quote would be refused.
+    assert [p.id for p in check_the_rates_are_real(None)] == ["nkenzapay.E016"]
+
+    provider = RateProvider.objects.create(slug="xe", label="XE", is_active=True)
+    settings.FX = {"API_KEY": "", "ACCOUNT_ID": ""}
+    problems = check_the_rates_are_real(None)
+    assert [p.id for p in problems] == ["nkenzapay.E018"]
+    # Named the way .env names them, or somebody edits the wrong line.
+    assert "FX_API_KEY" in problems[0].msg
+    assert "FX_API_ACCOUNT_ID" in problems[0].msg
+
+    # XE authenticates with both, so a key on its own is still not usable.
+    settings.FX = {"API_KEY": "a-key", "ACCOUNT_ID": ""}
+    assert [p.id for p in check_the_rates_are_real(None)] == ["nkenzapay.E018"]
+
+    settings.FX = {"API_KEY": "a-key", "ACCOUNT_ID": "an-account"}
+    assert check_the_rates_are_real(None) == []
+
+    # The free provider needs nothing, so it must not be asked for credentials.
+    # Its row is created by a migration, switched off, so switch over rather
+    # than renaming this one onto a slug that is already taken.
+    provider.is_active = False
+    provider.save()
+    RateProvider.objects.filter(slug="exchangerate_api").update(is_active=True)
+    settings.FX = {"API_KEY": "", "ACCOUNT_ID": ""}
+    assert check_the_rates_are_real(None) == []
+
+
 def test_the_deploy_check_refuses_one_key_doing_two_jobs(settings):
     from nkenzapay.common.checks import check_secrets_are_real
 

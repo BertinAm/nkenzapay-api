@@ -26,6 +26,11 @@ class RateUnavailable(Exception):
 
 class BaseProvider:
     slug = ""
+    label = ""
+    #: Keys in settings.FX this provider cannot work without. Read by the
+    #: deploy check, so a provider switched on without its credentials is
+    #: caught at deploy rather than by the first customer to ask for a price.
+    needs: tuple[str, ...] = ()
 
     def fetch(self, base: str, quote: str) -> Decimal:
         raise NotImplementedError
@@ -36,6 +41,7 @@ class MockProvider(BaseProvider):
     example in the tests matches what a developer sees on screen."""
 
     slug = "mock"
+    label = "Development rates"
 
     TABLE = {
         ("XAF", "INR"): Decimal("0.16935"),
@@ -59,6 +65,8 @@ class XEProvider(BaseProvider):
     """XE Currency Data. Basic auth with an account id and an API key."""
 
     slug = "xe"
+    label = "XE Currency Data"
+    needs = ("API_KEY", "ACCOUNT_ID")
     endpoint = "https://xecdapi.xe.com/v1/convert_from"
 
     def fetch(self, base, quote):
@@ -89,6 +97,8 @@ class OpenExchangeRatesProvider(BaseProvider):
     one, rather than being recomputed later from whatever is current."""
 
     slug = "openexchangerates"
+    label = "Open Exchange Rates"
+    needs = ("API_KEY",)
     endpoint = "https://openexchangerates.org/api/latest.json"
 
     def fetch(self, base, quote):
@@ -112,11 +122,81 @@ class OpenExchangeRatesProvider(BaseProvider):
         return quote_per_usd / base_per_usd
 
 
+class ExchangeRateApiProvider(BaseProvider):
+    """ExchangeRate-API's open endpoint. No key, no account, no card.
+
+    The one free source checked that actually quotes XAF. Frankfurter is free
+    and keyless too and covers far more currencies, but not the CFA franc:
+    XAF/INR comes back "not found", which is no use to a platform whose whole
+    business is Cameroon.
+
+    Quoted against USD like Open Exchange Rates, so a cross pair is two legs
+    divided. Updated once a day, which is worth knowing rather than working
+    around: refresh_seconds on the provider row should say hours, not seconds,
+    and a quote held for sixty seconds is still honest because the figure it
+    holds is the figure the source published.
+
+    Free as in no invoice, not as in no obligations. Their terms ask for
+    attribution on the free tier; read them before this prices anything real.
+    """
+
+    slug = "exchangerate_api"
+    label = "ExchangeRate-API (free)"
+    endpoint = "https://open.er-api.com/v6/latest/{base}"
+
+    def fetch(self, base, quote):
+        base = base.upper()
+        quote = quote.upper()
+        try:
+            response = requests.get(
+                self.endpoint.format(base=base), timeout=TIMEOUT_SECONDS
+            )
+            response.raise_for_status()
+            payload = response.json()
+        except (requests.RequestException, ValueError) as exc:
+            raise RateUnavailable(f"ExchangeRate-API request failed: {exc}") from exc
+
+        # It answers 200 with result: error rather than an HTTP status, so the
+        # body has to be read before the rates are trusted.
+        if payload.get("result") != "success":
+            raise RateUnavailable(
+                f"ExchangeRate-API refused {base}: "
+                f"{payload.get('error-type', 'no reason given')}"
+            )
+
+        rate = (payload.get("rates") or {}).get(quote)
+        if rate in (None, 0):
+            raise RateUnavailable(f"ExchangeRate-API has no {quote} rate for {base}.")
+        return Decimal(str(rate))
+
+
 PROVIDERS = {
     MockProvider.slug: MockProvider,
     XEProvider.slug: XEProvider,
     OpenExchangeRatesProvider.slug: OpenExchangeRatesProvider,
+    ExchangeRateApiProvider.slug: ExchangeRateApiProvider,
 }
+
+
+# settings.FX key -> the name to put in .env. They differ, and a check that
+# tells somebody to set FX_ACCOUNT_ID when the variable is FX_API_ACCOUNT_ID
+# sends them to edit a file and change nothing.
+ENV_NAMES = {
+    "API_KEY": "FX_API_KEY",
+    "ACCOUNT_ID": "FX_API_ACCOUNT_ID",
+}
+
+
+def credentials_missing(slug: str) -> tuple[str, ...]:
+    """The .env names this provider needs and does not have."""
+    provider = PROVIDERS.get(slug)
+    if provider is None:
+        return ()
+    return tuple(
+        ENV_NAMES.get(name, name)
+        for name in provider.needs
+        if not settings.FX.get(name)
+    )
 
 
 def get_provider_client(slug: str) -> BaseProvider:

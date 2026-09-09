@@ -275,6 +275,82 @@ def check_mail_can_actually_be_sent(app_configs, **kwargs):
 
 
 @register("nkenzapay", deploy=True)
+def check_the_rates_are_real(app_configs, **kwargs):
+    """What the platform is pricing real transfers from.
+
+    The mock provider returns a hard-coded table so the worked example in the
+    tests matches what a developer sees on screen. Left switched on, every quote
+    a customer accepts, every fee taken from it and every payout promised comes
+    off numbers that were typed into a source file — and nothing about the site
+    looks any different. It is the quietest way this platform could take
+    somebody's money against a rate that does not exist.
+
+    Runs against the database, so it is a deploy check and only asked about a
+    deployment.
+    """
+    from django.db import DatabaseError
+
+    try:
+        from nkenzapay.rates.models import RateProvider
+
+        active = RateProvider.objects.filter(is_active=True).first()
+    except DatabaseError:
+        # Before migrate, on a fresh box. Nothing to say yet.
+        return []
+
+    if active is None:
+        return [
+            Error(
+                "No exchange rate provider is switched on.",
+                hint=(
+                    "Every quote will be refused. Turn one on in the desk's "
+                    "Rates and fees screen."
+                ),
+                id="nkenzapay.E016",
+            )
+        ]
+
+    if active.slug == "mock":
+        return [
+            Error(
+                "Transfers are being priced from the mock rate table.",
+                hint=(
+                    "The mock provider returns figures hard-coded in "
+                    "nkenzapay/rates/providers.py, not a market rate. Put the "
+                    "credentials in .env as FX_API_KEY and FX_API_ACCOUNT_ID, "
+                    "then switch the provider in the desk's Rates and fees "
+                    "screen. Silence this with "
+                    "SILENCED_SYSTEM_CHECKS=nkenzapay.E017 only on a staging "
+                    "deployment that takes no real money."
+                ),
+                id="nkenzapay.E017",
+            )
+        ]
+
+    # A live provider with no credentials fails on the first quote, and the
+    # customer meets it rather than the deploy does. Which credentials each one
+    # needs is declared on the provider class, so adding a provider does not
+    # mean remembering to edit this.
+    from nkenzapay.rates.providers import credentials_missing
+
+    missing = credentials_missing(active.slug)
+    if missing:
+        names = ", ".join(missing)
+        return [
+            Error(
+                f"{active.label} is live but {names} is empty.",
+                hint=(
+                    "Every rate request will be refused and no quote can be "
+                    f"given. Set {names} in .env."
+                ),
+                id="nkenzapay.E018",
+            )
+        ]
+
+    return []
+
+
+@register("nkenzapay", deploy=True)
 def check_proxy_secret_is_usable(app_configs, **kwargs):
     """The shared secret that lets the front end vouch for a caller's address.
 

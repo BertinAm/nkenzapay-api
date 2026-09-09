@@ -175,17 +175,37 @@ class Command(BaseCommand):
         return corridors
 
     def seed_rates(self):
-        RateProvider.objects.update_or_create(
-            slug="mock",
-            defaults={"label": "Development rates", "is_active": True,
-                      "refresh_seconds": 60, "hold_seconds": 60, "markup_bps": 0},
+        """Make sure a row exists for each provider, and touch nothing else.
+
+        get_or_create, not update_or_create, and deliberately: which provider is
+        live is a commercial decision made on the desk, and re-running the seed
+        on a deployment must not quietly undo it. It used to force mock back to
+        is_active=True, so seeding a live site would have moved every quote onto
+        a hard-coded table with nothing on the site to show it.
+        """
+        wanted = [
+            ("mock", "Development rates", 60, 0),
+            ("exchangerate_api", "ExchangeRate-API (free)", 3600, 25),
+            ("xe", "XE Currency Data", 60, 25),
+        ]
+        for slug, label, refresh, markup in wanted:
+            RateProvider.objects.get_or_create(
+                slug=slug,
+                defaults={"label": label, "is_active": False,
+                          "refresh_seconds": refresh, "hold_seconds": 60,
+                          "markup_bps": markup},
+            )
+
+        # Only when nothing is on at all, which means a fresh install. A
+        # deployment with a provider already chosen keeps it.
+        if not RateProvider.objects.filter(is_active=True).exists():
+            RateProvider.objects.filter(slug="mock").update(is_active=True)
+
+        active = RateProvider.objects.filter(is_active=True).first()
+        self.stdout.write(
+            f"  rate providers: {RateProvider.objects.count()} "
+            f"(active: {active.slug if active else 'none'})"
         )
-        RateProvider.objects.update_or_create(
-            slug="xe",
-            defaults={"label": "XE Currency Data", "is_active": False,
-                      "refresh_seconds": 60, "hold_seconds": 60, "markup_bps": 25},
-        )
-        self.stdout.write("  rate providers: mock (active), xe")
 
     def seed_fees(self):
         """One global rule at 6%. Country overrides go beside it, not instead."""

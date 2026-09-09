@@ -16,7 +16,6 @@ env = environ.Env(
     CSRF_TRUSTED_ORIGINS=(list, ["http://localhost:3000"]),
     DATABASE_URL=(str, "sqlite:///" + str(BASE_DIR / "db.sqlite3")),
     REDIS_URL=(str, ""),
-    FX_PROVIDER=(str, "mock"),
     FX_API_KEY=(str, ""),
     FX_API_ACCOUNT_ID=(str, ""),
     EMAIL_BACKEND=(str, "django.core.mail.backends.console.EmailBackend"),
@@ -315,8 +314,13 @@ EMAIL_TIMEOUT = env.int("EMAIL_TIMEOUT", default=10)
 SERVER_EMAIL = env("SERVER_EMAIL", default=DEFAULT_FROM_EMAIL)
 
 # Foreign exchange. The key is read here and never leaves the server.
+#
+# Only the credentials. Which provider is live is a RateProvider row, switched
+# from the desk's Rates screen, so a corridor can be moved off a failing feed
+# without a deploy. There used to be an FX_PROVIDER here as well; nothing ever
+# read it, so setting it to xe changed the value in settings and nothing else,
+# while the mock table went on pricing every transfer.
 FX = {
-    "PROVIDER": env("FX_PROVIDER"),
     "API_KEY": env("FX_API_KEY"),
     "ACCOUNT_ID": env("FX_API_ACCOUNT_ID"),
 }
