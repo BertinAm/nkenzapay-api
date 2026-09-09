@@ -875,7 +875,15 @@ class AdminCountries(APIView):
     permission_classes = [CanWriteSettings]
 
     def get(self, request):
-        countries = list(Country.objects.select_related("currency"))
+        # The ones the platform trades with or means to, not the two hundred
+        # that exist so customers can say where they live. This screen is for
+        # opening and closing corridors; a list where the six that matter are
+        # buried among two hundred and forty is a list nobody can work.
+        countries = list(
+            Country.objects.select_related("currency").filter(
+                Q(is_enabled=True) | Q(is_origin=True) | Q(is_destination=True)
+            )
+        )
         rows = CountrySerializer(countries, many=True).data
 
         # Enabled ways in, per country. The payout side is the desk's own
@@ -937,8 +945,6 @@ class AdminCountries(APIView):
             raise DomainError(
                 "bad_country", "A country needs a two-letter code and a name."
             )
-        if Country.objects.filter(pk=iso2).exists():
-            raise DomainError("country_exists", f"{iso2} is already listed.")
 
         currency = Currency.objects.filter(pk=currency_code).first()
         if currency is None:
@@ -948,17 +954,36 @@ class AdminCountries(APIView):
                 "currencies this platform knows. Add it first.",
             )
 
-        country = Country.objects.create(
-            iso2=iso2,
-            name=name,
-            currency=currency,
-            dial_code=request.data.get("dial_code", ""),
-            flag_emoji=request.data.get("flag_emoji", ""),
-            is_enabled=False,
-            is_origin=True,
-            is_destination=True,
-            sort_order=(Country.objects.count() + 1),
-        )
+        # Almost every country already has a row, because customers can live
+        # anywhere. Opening one for business is promoting that row rather than
+        # writing a second: it keeps the code, the name and the dial code the
+        # customers who live there are already using, and gives it the currency
+        # and the two sides it needs to trade.
+        country = Country.objects.filter(pk=iso2).first()
+        if country is not None:
+            if country.is_origin or country.is_destination:
+                raise DomainError("country_exists", f"{iso2} is already listed.")
+            country.name = name
+            country.currency = currency
+            country.dial_code = request.data.get("dial_code") or country.dial_code
+            country.is_origin = True
+            country.is_destination = True
+            country.sort_order = Country.objects.filter(
+                Q(is_origin=True) | Q(is_destination=True)
+            ).count() + 1
+            country.save()
+        else:
+            country = Country.objects.create(
+                iso2=iso2,
+                name=name,
+                currency=currency,
+                dial_code=request.data.get("dial_code", ""),
+                flag_emoji=request.data.get("flag_emoji", ""),
+                is_enabled=False,
+                is_origin=True,
+                is_destination=True,
+                sort_order=(Country.objects.count() + 1),
+            )
 
         # Both directions against the hub, and nothing else. Pairing the new
         # country with every existing one also created Cameroon to Nigeria and

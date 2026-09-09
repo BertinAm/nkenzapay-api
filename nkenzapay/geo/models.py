@@ -28,7 +28,12 @@ class Currency(models.Model):
 class Country(models.Model):
     iso2 = models.CharField(max_length=2, primary_key=True)
     name = models.CharField(max_length=80)
-    currency = models.ForeignKey(Currency, on_delete=models.PROTECT, related_name="countries")
+    # Optional, because most rows here exist only so somebody can say where
+    # they live. A country the platform trades with carries a currency; the
+    # other two hundred are places customers happen to be, and inventing a
+    # currency for each would be inventing a rate for each.
+    currency = models.ForeignKey(Currency, null=True, blank=True,
+                                 on_delete=models.PROTECT, related_name="countries")
     dial_code = models.CharField(max_length=6)
     flag_emoji = models.CharField(max_length=8, blank=True)
     is_enabled = models.BooleanField(default=False)
