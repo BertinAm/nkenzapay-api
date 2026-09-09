@@ -316,10 +316,13 @@ def check_the_rates_are_real(app_configs, **kwargs):
                 "Transfers are being priced from the mock rate table.",
                 hint=(
                     "The mock provider returns figures hard-coded in "
-                    "nkenzapay/rates/providers.py, not a market rate. Put the "
-                    "credentials in .env as FX_API_KEY and FX_API_ACCOUNT_ID, "
-                    "then switch the provider in the desk's Rates and fees "
-                    "screen. Silence this with "
+                    "nkenzapay/rates/providers.py, not a market rate. "
+                    "Switch to a real one in the desk's Rates and fees screen: "
+                    "ExchangeRate-API (free) needs no credentials and no "
+                    "account, so it is the shortest way off this. XE and Open "
+                    "Exchange Rates want FX_API_KEY in .env first, and XE wants "
+                    "FX_API_ACCOUNT_ID beside it. If the provider is not listed "
+                    "on that screen, run migrate. Silence this with "
                     "SILENCED_SYSTEM_CHECKS=nkenzapay.E017 only on a staging "
                     "deployment that takes no real money."
                 ),
