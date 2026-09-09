@@ -133,8 +133,22 @@ class UserSerializer(serializers.ModelSerializer):
         return admin_profile.role if admin_profile else None
 
     def get_needs_onboarding(self, obj):
+        """Every step, not only the name.
+
+        This used to be is_complete, which is the name and the number alone, so
+        an account reached the app with no photograph and no identity document.
+        It could then price a transfer, choose a method, type in a recipient and
+        only at Create order be told it was not approved — the work first, the
+        condition afterwards. Asking for all of it once, at the start, is both
+        shorter and honest.
+
+        The desk is exempt: an admin account is created by another admin and has
+        no customer onboarding to do.
+        """
+        if getattr(obj, "admin_profile", None) is not None:
+            return False
         profile = getattr(obj, "profile", None)
-        return not (profile and profile.is_complete)
+        return not profile or bool(profile.missing_steps)
 
 
 class LoginActivitySerializer(serializers.ModelSerializer):

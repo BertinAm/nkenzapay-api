@@ -66,7 +66,11 @@ METHODS = [
     ("cash", "Cash deposit", "IN", "collect", "payments", "CDP", True, 5,
      {"location": "", "contact": ""}),
     # Payout side, used by the desk rather than shown on the quote page.
+    # One per network the recipient's number can be on. The customer picks from
+    # these when they say where the money is going, so a network missing here is
+    # a network nobody can be paid on.
     ("mtn_payout", "MTN Mobile Money", "CM", "payout", "smartphone", "Instant", True, 1, {}),
+    ("orange_payout", "Orange Money", "CM", "payout", "smartphone", "Instant", True, 2, {}),
     ("upi_payout", "UPI", "IN", "payout", "qr_code_2", "Instant", True, 1, {}),
 ]
 

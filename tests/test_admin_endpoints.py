@@ -7,6 +7,7 @@ the view builds its response at all, which is the failure that actually
 happened.
 """
 import pytest
+from django.db.models import Q
 from rest_framework.test import APIClient
 
 pytestmark = pytest.mark.django_db
@@ -67,3 +68,29 @@ def test_a_customer_cannot_reach_the_desk(api, customer, seeded):
     api.force_authenticate(customer)
     for path in READS:
         assert api.get(path).status_code == 403, f"{path} let a customer in"
+
+
+def test_adding_a_country_pairs_it_with_the_hub_and_nothing_else(api, owner, seeded):
+    """India at one end of every corridor, which is what the two screens are.
+
+    This used to pair the new country with every existing one, so opening Benin
+    also created Benin to Cameroon and Cameroon to Benin. Neither screen can
+    offer those and nobody trades them, but they stayed in the desk's fee and
+    limit lists for good.
+    """
+    from nkenzapay.geo.models import Corridor
+
+    api.force_authenticate(owner)
+    # Benin, on the XOF the seed already knows: the endpoint refuses a currency
+    # the platform has never heard of, which is its own separate check.
+    response = api.post(
+        "/api/v1/admin/countries",
+        {"iso2": "BJ", "name": "Benin", "currency": "XOF", "dial_code": "+229"},
+        format="json",
+    )
+    assert response.status_code == 201, response.content
+
+    made = Corridor.objects.filter(Q(source_id="BJ") | Q(target_id="BJ"))
+    assert {(c.source_id, c.target_id) for c in made} == {("BJ", "IN"), ("IN", "BJ")}
+    # Opened switched off, so it appears on a screen only once somebody decides.
+    assert not made.filter(is_enabled=True).exists()

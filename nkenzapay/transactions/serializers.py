@@ -62,7 +62,50 @@ class CreateTransactionSerializer(serializers.Serializer):
             raise serializers.ValidationError(
                 {"recipient_number": "Enter the recipient's Mobile Money number."}
             )
+        if quote.direction == "send":
+            attrs["recipient_details"] = self._network(quote, attrs)
         return attrs
+
+    def _network(self, quote, attrs):
+        """Which network the recipient's number is on.
+
+        A Mobile Money number does not say who runs it, and paying an Orange
+        number through MTN does not arrive. The desk was left to work it out
+        from the prefix, which is a guess about somebody else's money.
+
+        Checked against the payout methods actually open for the destination
+        rather than a list in here, so opening a network is a row in the desk's
+        own screen.
+        """
+        from nkenzapay.payments.models import PaymentMethod
+
+        details = dict(attrs.get("recipient_details") or {})
+        network = str(details.get("network") or "").strip()
+
+        allowed = set(
+            PaymentMethod.objects.filter(
+                country_id=quote.corridor.target_id,
+                side=PaymentMethod.PAYOUT,
+                is_enabled=True,
+            ).values_list("slug", flat=True)
+        )
+
+        if network in allowed:
+            details.pop("network_other", None)
+            return details
+
+        if network == "other":
+            named = str(details.get("network_other") or "").strip()
+            if not named:
+                raise serializers.ValidationError(
+                    {"recipient_details": "Say which network the number is on."}
+                )
+            details["network_other"] = named[:60]
+            return details
+
+        raise serializers.ValidationError(
+            {"recipient_details": "Choose the network the recipient's number is on."}
+        )
 
 
 class AttachmentSerializer(serializers.ModelSerializer):
@@ -199,7 +242,12 @@ class TransactionDetailSerializer(TransactionListSerializer):
             elif index < current_index or (at and index != current_index):
                 state = "done"
             elif index == current_index:
-                state = "current"
+                # Completed is finished, not in progress. Every other step at
+                # the current index is something still happening, so "current"
+                # is right for them and wrong for the last one: a transfer that
+                # had landed showed its final step in the amber "working on it"
+                # mark, and never got the tick that says it is over.
+                state = "done" if obj.status == Status.COMPLETED else "current"
             else:
                 state = "pending"
             steps.append({"label": label, "state": state, "at": at})

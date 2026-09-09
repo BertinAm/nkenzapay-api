@@ -1,5 +1,14 @@
 from django.db import models
 
+# Every corridor runs between India and somewhere else. India is the fixed end
+# of the business: money comes to it from an African country, or goes from it to
+# one, and the two customer screens are those two directions. Nothing trades
+# Cameroon to Nigeria, and a corridor that did would appear on neither screen.
+#
+# Named here rather than written into each caller so that opening a second hub
+# is one edit and an obvious one, instead of a hunt through the admin API.
+HUB_COUNTRY = "IN"
+
 
 class Currency(models.Model):
     code = models.CharField(max_length=3, primary_key=True)

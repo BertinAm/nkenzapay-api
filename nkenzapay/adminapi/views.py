@@ -18,7 +18,7 @@ from nkenzapay.common.exceptions import DomainError
 from nkenzapay.content.models import NewsPost
 from nkenzapay.content.serializers import AdminNewsSerializer
 from nkenzapay.disputes.models import Dispute
-from nkenzapay.geo.models import Corridor, Country, Currency
+from nkenzapay.geo.models import HUB_COUNTRY, Corridor, Country, Currency
 from nkenzapay.geo.serializers import CorridorSerializer, CountrySerializer
 from nkenzapay.notifications.models import DeliveryRule, Notification
 from nkenzapay.security.models import SecurityEvent, Severity
@@ -365,6 +365,10 @@ class AdminTransactionDetail(APIView):
                 "pay_customer": money(txn.receive_amount, txn.receive_currency_id),
                 "currency": txn.receive_currency_id,
             },
+            # Who the money actually goes to on a send. The screen had the
+            # figure and not the destination, so the desk knew what to pay and
+            # had to open the customer's chat to find out where.
+            "recipient": _recipient(txn),
             "risk": _risk_checks(txn),
             "audit": AuditEntrySerializer(
                 AuditEntry.objects.filter(target_id=str(txn.pk))[:20], many=True
@@ -391,6 +395,35 @@ def _photo_url(profile):
     from nkenzapay.common.storage import storage
 
     return storage().presign_get(profile.photo_key, ttl=300)
+
+
+def _recipient(txn):
+    """Name, number and network for a transfer that pays somebody else.
+
+    The network is stored as a payout method's slug, so it is turned back into
+    the label the desk reads on every other screen. A customer who picked
+    "Another network" typed the name themselves, and it is shown as they wrote
+    it with a flag saying so — the desk has to talk to them before paying it.
+    """
+    if not txn.recipient_name:
+        return None
+
+    details = txn.recipient_details or {}
+    slug = details.get("network") or ""
+    label, supported = "", False
+
+    if slug == "other":
+        label = details.get("network_other") or "Not specified"
+    elif slug:
+        method = PaymentMethod.objects.filter(slug=slug).first()
+        label, supported = (method.label, True) if method else (slug, False)
+
+    return {
+        "name": txn.recipient_name,
+        "number": txn.recipient_number,
+        "network": label,
+        "network_supported": supported,
+    }
 
 
 def _risk_checks(txn):
@@ -927,12 +960,18 @@ class AdminCountries(APIView):
             sort_order=(Country.objects.count() + 1),
         )
 
-        for other in Country.objects.exclude(pk=iso2):
+        # Both directions against the hub, and nothing else. Pairing the new
+        # country with every existing one also created Cameroon to Nigeria and
+        # its reverse, which no screen offers and nobody trades: adding the
+        # fourth country would have written twelve corridors, ten of them
+        # meaningless, and left them in the desk's fee and limit lists forever.
+        hub = Country.objects.filter(pk=HUB_COUNTRY).first()
+        if hub is not None and hub.pk != country.pk:
             Corridor.objects.get_or_create(
-                source=country, target=other, defaults={"is_enabled": False}
+                source=country, target=hub, defaults={"is_enabled": False}
             )
             Corridor.objects.get_or_create(
-                source=other, target=country, defaults={"is_enabled": False}
+                source=hub, target=country, defaults={"is_enabled": False}
             )
 
         audit.record(actor=request.user, action="settings.country_added",

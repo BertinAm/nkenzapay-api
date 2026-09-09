@@ -81,12 +81,87 @@ def test_a_send_order_opens_once_the_recipient_is_given(signed_in, send_corridor
             "collect_method": "upi",
             "recipient_name": "Marie Nkenganyi",
             "recipient_number": "+237 6 70 00 00 00",
+            "recipient_details": {"network": "mtn_payout"},
         },
         format="json",
     )
 
     assert response.status_code == 201, response.content
     assert response.json()["status"] == "awaiting_payment"
+
+
+def test_a_send_order_needs_the_recipients_network(signed_in, send_corridor):
+    """A Mobile Money number does not say who runs it.
+
+    Paying an Orange number through MTN does not arrive, and the desk was left
+    guessing from the prefix — a guess about somebody else's money.
+    """
+    quote = signed_in.post(
+        "/api/v1/rates/quote",
+        {"source": "IN", "target": "CM", "direction": "send",
+         "send_amount": "10000"},
+        format="json",
+    ).json()
+    order = {
+        "quote_reference": quote["reference"],
+        "collect_method": "upi",
+        "recipient_name": "Marie Nkenganyi",
+        "recipient_number": "+237 6 70 00 00 00",
+    }
+
+    missing = signed_in.post("/api/v1/transactions", order, format="json")
+    assert missing.status_code == 400
+    assert "recipient_details" in missing.json()["error"]["detail"]
+
+    # A network the platform cannot pay out on is refused just as firmly as
+    # none at all: it would be an order nobody could fulfil.
+    invented = signed_in.post(
+        "/api/v1/transactions",
+        {**order, "recipient_details": {"network": "not_a_network"}},
+        format="json",
+    )
+    assert invented.status_code == 400
+
+    # "Another network" is allowed, but only when they say which.
+    unnamed = signed_in.post(
+        "/api/v1/transactions",
+        {**order, "recipient_details": {"network": "other"}},
+        format="json",
+    )
+    assert unnamed.status_code == 400
+
+    named = signed_in.post(
+        "/api/v1/transactions",
+        {**order, "recipient_details": {"network": "other",
+                                        "network_other": "Nexttel"}},
+        format="json",
+    )
+    assert named.status_code == 201, named.content
+
+
+def test_orange_is_a_network_money_can_be_sent_to(signed_in, send_corridor):
+    """Cameroon had MTN and Orange to collect from and only MTN to pay out to,
+    which was invisible until somebody had to choose one."""
+    quote = signed_in.post(
+        "/api/v1/rates/quote",
+        {"source": "IN", "target": "CM", "direction": "send",
+         "send_amount": "10000"},
+        format="json",
+    ).json()
+
+    response = signed_in.post(
+        "/api/v1/transactions",
+        {
+            "quote_reference": quote["reference"],
+            "collect_method": "upi",
+            "recipient_name": "Marie Nkenganyi",
+            "recipient_number": "+237 6 90 00 00 00",
+            "recipient_details": {"network": "orange_payout"},
+        },
+        format="json",
+    )
+
+    assert response.status_code == 201, response.content
 
 
 def test_the_dial_code_arrives_with_the_amount_already_in_it(
