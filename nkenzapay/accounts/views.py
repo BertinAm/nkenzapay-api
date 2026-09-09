@@ -240,9 +240,11 @@ class IdDocumentCommitView(APIView):
         notifications.notify(
             request.user, "account.id_submitted",
             email_body=(
-                "Thanks. Your document is with the desk.\n\n"
-                "Someone checks it by hand, usually the same day. We will "
-                "email you either way."
+                "Thank you, we have your document, and that is everything we "
+                "need from you.\n\n"
+                "Someone checks it by hand rather than a machine, usually the "
+                "same day, and we will email you as soon as it is done. There "
+                "is nothing else for you to do in the meantime."
             ),
             email_action={
                 "label": "See where you are",

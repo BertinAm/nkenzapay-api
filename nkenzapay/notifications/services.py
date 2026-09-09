@@ -21,20 +21,25 @@ logger = logging.getLogger(__name__)
 CATALOGUE = {
     # Account
     "account.welcome": ("Welcome to NkenzaPay",
-                        "Your account is open. Finish your profile to start a transfer.",
+                        "Your account is open. There are a couple of things "
+                        "left before your first transfer, and they take about "
+                        "two minutes.",
                         "person", "", "neutral", True),
     "account.verify_email": ("Confirm your email address",
                              "Tap the link we sent to finish setting up your account.",
                              "mark_email_unread", "", "neutral", True),
     "account.password_reset": ("Password reset requested",
-                               "If this was not you, contact the desk straight away.",
+                               "If this was not you, tell us straight away and "
+                               "we will secure the account.",
                                "shield_lock", "", "warn", True),
     # Identity verification.
-    "account.id_submitted": ("Document received",
-                             "The desk is checking it. We will email you either way.",
+    "account.id_submitted": ("Thank you, we have your document",
+                             "Someone is looking at it now, usually the same "
+                             "day. We will email you as soon as it is done.",
                              "how_to_reg", "", "neutral", True),
-    "account.id_approved": ("Your account is approved",
-                            "You can send and receive money now.",
+    "account.id_approved": ("You are approved",
+                            "Welcome to NkenzaPay. You can send and receive "
+                            "money whenever you like.",
                             "verified_user", "open_dashboard", "good", True),
     "account.id_rejected": ("We could not approve that document",
                             "{detail}",
@@ -64,11 +69,13 @@ CATALOGUE = {
     "transfer.payout_sent": ("Payout sent",
                              "{receive_amount} is on its way. Confirm once it lands.",
                              "payments", "confirm", "good", True),
-    "transfer.completed": ("Transfer complete",
-                           "{reference} is closed. Your receipt is ready to download.",
+    "transfer.completed": ("All done",
+                           "{reference} is complete and your receipt is ready "
+                           "to download. Thank you for using NkenzaPay.",
                            "task_alt", "download", "good", True),
-    "transfer.rejected": ("Payment could not be verified",
-                          "The desk left a reason in the chat for {reference}.",
+    "transfer.rejected": ("We could not verify that payment",
+                          "There is a note in the chat for {reference} saying "
+                          "why, and we can sort it out from there.",
                           "block", "open_chat", "bad", True),
     "transfer.cancelled": ("Transfer cancelled",
                            "{reference} was cancelled. Nothing was charged.",

@@ -117,9 +117,10 @@ class VerificationDecide(APIView):
         notifications.notify(
             profile.user, "account.id_approved",
             email_body=(
-                "Your account is approved. You can send and receive money now.\n\n"
-                "Every transfer opens its own chat with the desk, so there is "
-                "always someone to ask."
+                "Good news: your account is approved, and you can send and "
+                "receive money whenever you like.\n\n"
+                "Every transfer opens its own chat with us, so if anything is "
+                "unclear there is a real person to ask."
             ),
             email_action={
                 "label": "Start a transfer",
@@ -159,9 +160,11 @@ class VerificationDecide(APIView):
             profile.user, "account.id_rejected",
             context={"detail": note},
             email_body=(
-                "We could not approve the document you sent.\n\n"
+                "We were not able to approve the document you sent, and here "
+                "is why:\n\n"
                 f"{note}\n\n"
-                "Send another one and the desk will look again."
+                "This happens often and it is easily sorted. Send another one "
+                "whenever you are ready and we will look again straight away."
             ),
             email_action={
                 "label": "Send another document",

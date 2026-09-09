@@ -98,19 +98,21 @@ class Command(BaseCommand):
 
         if profile.verification_state == Profile.REJECTED:
             body = (
-                "The document you sent could not be approved, so your account "
-                "is still waiting.\n\n"
+                "We were not able to approve the document you sent, so your "
+                "account is still waiting. Here is what we said at the "
+                "time:\n\n"
                 f"{profile.verification_note}\n\n"
-                "Send another one and the desk will look again."
+                "This happens often and it is easily sorted. Send another one "
+                "whenever you are ready and we will look again straight away."
             )
-            summary = "your document was not approved"
+            summary = "we could not approve your document"
         else:
             wanted = [STEP_WORDING[step] for step in missing if step in STEP_WORDING]
             body = (
-                "Your NkenzaPay account is open, but you cannot send or "
-                "receive money until it is approved.\n\n"
+                "Your NkenzaPay account is open and there is one step left "
+                "before you can send or receive money.\n\n"
                 f"We still need {_join(wanted)}. It takes a couple of minutes, "
-                "and the desk usually checks it the same day."
+                "and we usually check it the same day."
             )
             summary = "we still need " + _join(wanted)
 
