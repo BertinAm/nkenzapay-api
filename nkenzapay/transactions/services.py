@@ -485,6 +485,16 @@ def cancel(*, reference, actor, reason="", request=None):
              audit_action="transaction.cancelled",
              audit_summary=f"{getattr(actor, 'email', 'system')} cancelled {txn.reference}")
     notifications.notify(txn.user, "transfer.cancelled", transaction=txn)
+    # The desk has to hear about this. A transfer it may already have started
+    # working simply left the queue, and finding out by noticing an absence is
+    # not finding out. Whoever pressed the button is excluded, because being
+    # told about your own click is noise.
+    notifications.notify_desk(
+        "admin.transfer_cancelled",
+        transaction=txn,
+        context={"who": getattr(actor, "display_name", None) or "The system"},
+        exclude=actor,
+    )
     return txn
 
 

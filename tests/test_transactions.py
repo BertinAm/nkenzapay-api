@@ -338,6 +338,82 @@ def test_cancellation_is_allowed_before_payment(receive_order, customer):
     assert txn.status == Status.CANCELLED
 
 
+def test_a_customer_cancels_through_the_endpoint_they_actually_call(
+    receive_order, customer
+):
+    """Over a real session, with an idempotency key, the way the button does.
+
+    The service was covered and the endpoint was not, which is how the
+    idempotency fingerprint managed to be broken for every browser while the
+    suite stayed green.
+    """
+    from rest_framework.test import APIClient
+
+    customer.set_password("a-long-enough-password")
+    customer.save()
+    client = APIClient(enforce_csrf_checks=True)
+    client.post("/api/v1/auth/login",
+                {"email": customer.email, "password": "a-long-enough-password"},
+                format="json")
+    token = client.cookies["csrftoken"].value
+
+    response = client.post(
+        f"/api/v1/transactions/{receive_order.reference}/actions/cancel",
+        {"reason": "The rate moved"},
+        format="json",
+        HTTP_X_CSRFTOKEN=token,
+        HTTP_IDEMPOTENCY_KEY="a-key-a-second-tap-would-repeat",
+    )
+
+    assert response.status_code == 200, response.content
+    assert response.json()["status"] == "cancelled"
+
+    # A second tap is the same intent, not a second cancellation.
+    again = client.post(
+        f"/api/v1/transactions/{receive_order.reference}/actions/cancel",
+        {"reason": "The rate moved"},
+        format="json",
+        HTTP_X_CSRFTOKEN=token,
+        HTTP_IDEMPOTENCY_KEY="a-key-a-second-tap-would-repeat",
+    )
+    assert again.status_code == 200, again.content
+
+
+def test_one_customer_cannot_cancel_anothers_transfer(receive_order, customer, db):
+    from rest_framework.test import APIClient
+
+    from nkenzapay.accounts.models import User
+
+    stranger = User.objects.create_user(email="nosy3@example.com",
+                                        password="a-long-password-7")
+    client = APIClient()
+    client.force_authenticate(stranger)
+
+    response = client.post(
+        f"/api/v1/transactions/{receive_order.reference}/actions/cancel",
+        {}, format="json",
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "not_yours"
+    receive_order.refresh_from_db()
+    assert receive_order.status != Status.CANCELLED
+
+
+def test_cancelling_tells_the_desk(receive_order, customer, desk):
+    """A transfer the desk may already be working must not just vanish."""
+    from nkenzapay.notifications.models import Notification
+
+    services.cancel(reference=receive_order.reference, actor=customer,
+                    reason="Changed my mind")
+
+    told = Notification.objects.filter(event="admin.transfer_cancelled")
+    assert told.exists()
+    assert receive_order.reference in told.first().body
+    # The customer hears about it as themselves, not as a desk notice.
+    assert not told.filter(user=customer).exists()
+
+
 def test_cancellation_is_refused_after_verification(receive_order, customer, desk):
     attach_proof(receive_order, customer)
     services.customer_paid(reference=receive_order.reference, user=customer)
