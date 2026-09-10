@@ -123,6 +123,13 @@ class Profile(models.Model):
     reminders_sent = models.PositiveSmallIntegerField(default=0)
     last_reminder_at = models.DateTimeField(null=True, blank=True)
 
+    # Counted separately from the identity nudges above. They chase different
+    # things and stop on different schedules, and one counter for both would
+    # mean confirming an email quietly used up the budget for asking about a
+    # passport.
+    email_reminders_sent = models.PositiveSmallIntegerField(default=0)
+    last_email_reminder_at = models.DateTimeField(null=True, blank=True)
+
     IDENTITY_FIELDS = (
         "first_name",
         "middle_name",

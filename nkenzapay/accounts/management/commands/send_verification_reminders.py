@@ -30,6 +30,13 @@ SCHEDULE = {
 
 MAX_REMINDERS = 4
 
+# Confirming an address is one tap, so it is chased sooner and dropped sooner
+# than a passport. Two messages and then silence: somebody who has ignored both
+# either cannot reach that inbox or does not want to, and a third would only
+# teach them to filter us.
+EMAIL_SCHEDULE = {0: timedelta(hours=24), 1: timedelta(days=3)}
+MAX_EMAIL_REMINDERS = 2
+
 # What to say about each missing step. Written to be read on a phone, in the
 # order the app asks for them.
 STEP_WORDING = {
@@ -92,6 +99,77 @@ class Command(BaseCommand):
 
         verb = "would email" if dry_run else "emailed"
         self.stdout.write(self.style.SUCCESS(f"{verb} {sent} account(s)."))
+
+        confirmed = self.chase_unconfirmed_emails(now, dry_run)
+        self.stdout.write(self.style.SUCCESS(
+            f"{verb} {confirmed} account(s) about confirming their address."
+        ))
+
+    def chase_unconfirmed_emails(self, now, dry_run):
+        """Nudge people who never opened the confirmation link.
+
+        A confirmed address is where a receipt goes and where a reset link goes
+        if somebody is ever locked out, so an account without one is one bad
+        day away from being unreachable. Kept separate from the identity chase
+        above: they ask for different things and stop at different points.
+        """
+        candidates = (
+            Profile.objects.filter(user__email_verified_at__isnull=True)
+            .filter(email_reminders_sent__lt=MAX_EMAIL_REMINDERS)
+            .exclude(user__is_suspended=True)
+            .filter(user__admin_profile__isnull=True)
+            .select_related("user")
+        )
+
+        sent = 0
+        for profile in candidates:
+            wait = EMAIL_SCHEDULE.get(profile.email_reminders_sent)
+            if wait is None:
+                continue
+            since = profile.last_email_reminder_at or profile.user.date_joined
+            if now - since < wait:
+                continue
+
+            if dry_run:
+                self.stdout.write(
+                    f"  would ask {profile.user.email} to confirm their address "
+                    f"(#{profile.email_reminders_sent + 1})"
+                )
+            else:
+                self.remind_email(profile)
+            sent += 1
+        return sent
+
+    def remind_email(self, profile):
+        from django.conf import settings
+
+        from nkenzapay.accounts.models import EmailToken
+        from nkenzapay.accounts.views import issue_email_token, verify_link
+
+        # A fresh link every time. The one from sign-up may have expired, and a
+        # reminder carrying a dead link is worse than no reminder: somebody
+        # taps it, is told it is invalid, and concludes the account is broken.
+        token = issue_email_token(profile.user, EmailToken.PURPOSE_VERIFY)
+
+        notifications.notify(
+            profile.user, "account.verify_email",
+            email_body=(
+                "Your NkenzaPay account is open, but we have not been able to "
+                "confirm your email address yet.\n\n"
+                "It takes one tap, and it matters for two things: it is where "
+                "your receipts go, and it is the only way we can get you back "
+                "in if you are ever locked out."
+            ),
+            email_action={
+                "label": "Confirm my email",
+                "url": verify_link(token),
+                "footnote": "This link works once and expires in 24 hours.",
+            },
+        )
+
+        profile.email_reminders_sent += 1
+        profile.last_email_reminder_at = timezone.now()
+        profile.save(update_fields=["email_reminders_sent", "last_email_reminder_at"])
 
     def remind(self, profile, missing):
         from django.conf import settings
