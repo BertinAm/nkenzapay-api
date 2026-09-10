@@ -15,6 +15,8 @@ import logging
 
 from django.utils import timezone
 
+from nkenzapay.common.text import spreadsheet_safe
+
 logger = logging.getLogger(__name__)
 
 DATASETS = ("transactions", "users", "payments", "fees", "analytics",
@@ -217,8 +219,17 @@ def to_csv(sheets: dict) -> bytes:
         if index:
             writer.writerow([])
         writer.writerow([f"# {name}"])
-        writer.writerows(rows)
+        writer.writerows(_safe_row(row) for row in rows)
     return buffer.getvalue().encode("utf-8-sig")
+
+
+def _safe_row(row):
+    """Every cell, because customer text reaches most of these columns.
+
+    A name, an email or a recipient beginning with = + - or @ is a formula the
+    moment the desk opens the file. See common/text.spreadsheet_safe.
+    """
+    return [spreadsheet_safe(cell) for cell in row]
 
 
 def to_xlsx(sheets: dict) -> bytes:
@@ -230,7 +241,7 @@ def to_xlsx(sheets: dict) -> bytes:
     for name, rows in sheets.items():
         sheet = book.create_sheet(title=name[:31])
         for row in rows:
-            sheet.append(row)
+            sheet.append(_safe_row(row))
         if sheet.max_row:
             for cell in sheet[1]:
                 cell.font = Font(bold=True)

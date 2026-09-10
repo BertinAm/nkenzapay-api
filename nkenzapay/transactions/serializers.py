@@ -1,6 +1,7 @@
 from rest_framework import serializers
 
 from nkenzapay.common.money import display_amount, format_amount
+from nkenzapay.common.text import clean_line
 from nkenzapay.payments.models import PaymentMethod
 from nkenzapay.rates.models import Quote
 
@@ -35,6 +36,15 @@ class CreateTransactionSerializer(serializers.Serializer):
     recipient_name = serializers.CharField(required=False, allow_blank=True, max_length=160)
     recipient_number = serializers.CharField(required=False, allow_blank=True, max_length=32)
     recipient_details = serializers.DictField(required=False)
+
+    # The recipient's name reaches the desk's screen, the payout instruction
+    # and the exported spreadsheet. All three are read by a person deciding
+    # where to send money.
+    def validate_recipient_name(self, value):
+        return clean_line(value, limit=160)
+
+    def validate_recipient_number(self, value):
+        return clean_line(value, limit=32)
 
     def validate_quote_reference(self, value):
         quote = Quote.objects.select_related(
@@ -139,11 +149,17 @@ class AttachmentSerializer(serializers.ModelSerializer):
 class MessageSerializer(serializers.ModelSerializer):
     attachments = AttachmentSerializer(many=True, read_only=True)
     sender_name = serializers.SerializerMethodField()
+    # Which transfer this was written against. The conversation is one flow per
+    # customer, so without this a payment screenshot halfway up the thread
+    # belongs to nothing in particular and the reader has to work out which of
+    # their transfers it was for.
+    reference = serializers.CharField(source="transaction.reference",
+                                      read_only=True)
 
     class Meta:
         model = Message
         fields = ["id", "kind", "body", "payload", "is_from_desk", "sender_name",
-                  "attachments", "read_at", "created_at"]
+                  "reference", "attachments", "read_at", "created_at"]
 
     def get_sender_name(self, obj):
         if obj.is_from_desk:

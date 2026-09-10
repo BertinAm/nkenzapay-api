@@ -22,6 +22,11 @@ class Status(models.TextChoices):
 # fixed, and nothing further may be posted by either side.
 CLOSED_STATUSES = {Status.COMPLETED, Status.CANCELLED, Status.REJECTED}
 
+# Sitting on a decision somebody at the desk has to make. Named once, because
+# the queue, the badges and the inbox all have to agree about what "waiting on
+# us" means, and three copies of a list is three chances to disagree.
+NEEDS_DESK_STATUSES = {Status.PROOF_SUBMITTED, Status.PAYMENT_VERIFICATION}
+
 # The short words the admin queue uses, where a column is too narrow for the
 # full status. Same colour mapping, shorter label.
 SHORT_LABELS = {
@@ -43,7 +48,7 @@ SHORT_LABELS = {
 
 class TransactionQuerySet(models.QuerySet):
     def needs_desk(self):
-        return self.filter(status__in=[Status.PROOF_SUBMITTED, Status.PAYMENT_VERIFICATION])
+        return self.filter(status__in=NEEDS_DESK_STATUSES)
 
     def open(self):
         return self.exclude(status__in=CLOSED_STATUSES)

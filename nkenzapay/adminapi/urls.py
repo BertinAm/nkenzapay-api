@@ -21,6 +21,12 @@ urlpatterns = [
     path("transactions/<str:reference>/<str:action>", views.AdminTransactionAction.as_view()),
 
     path("messages/inbox", views.AdminInbox.as_view()),
+    # Threads are per customer. Kept above the users routes, which end in a
+    # catch-all <str:action> that would otherwise swallow these.
+    path("customers/<int:pk>/messages", views.AdminCustomerThread.as_view()),
+    path("customers/<int:pk>/attachments/upload-url",
+         views.AdminThreadUploadUrl.as_view()),
+    path("customers/<int:pk>/attachments", views.AdminThreadAttachment.as_view()),
 
     path("users", views.AdminUserList.as_view()),
     path("users/<int:pk>", views.AdminUserDetail.as_view()),

@@ -229,7 +229,13 @@ CSRF_COOKIE_SECURE = not DEBUG
 CSRF_COOKIE_SAMESITE = "Lax"
 CSRF_TRUSTED_ORIGINS = env("CSRF_TRUSTED_ORIGINS")
 SESSION_ENGINE = "django.contrib.sessions.backends.db"
-SESSION_COOKIE_AGE = 60 * 60 * 24 * 14
+# Eight hours, not a fortnight. This is a session that can move money and, on a
+# desk account, approve somebody else's identity; a phone left on a table
+# should not still be signed in tomorrow. The clock is refreshed on every
+# request, so it is eight hours of not using the site rather than eight hours
+# from signing in.
+SESSION_COOKIE_AGE = 60 * 60 * 8
+SESSION_SAVE_EVERY_REQUEST = True
 SESSION_COOKIE_NAME = "nkenzapay_session"
 CSRF_COOKIE_NAME = "csrftoken"
 # The front end reads this to put the token in a header, so it cannot be

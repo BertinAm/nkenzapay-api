@@ -213,6 +213,43 @@ class AttachmentUrl(APIView):
                          "expires_in": 60})
 
 
+class MyThread(APIView):
+    """The customer's whole conversation with the desk, across every transfer.
+
+    One thread per person rather than one per order. Somebody who has sent
+    money three times has had one relationship with the desk, and made to hunt
+    through three chats for the answer to a question they asked once.
+
+    Each message still carries the transfer it was written against, so the
+    thread can label a payment screenshot with the order it belongs to.
+    """
+
+    permission_classes = [IsAuthenticated]
+    throttle_scope = "message"
+
+    def get(self, request):
+        messages = services.customer_thread(request.user)
+        after = request.query_params.get("after")
+        if after:
+            messages = messages.filter(id__gt=after)
+        return Response(
+            MessageSerializer(messages, many=True, context={"request": request}).data
+        )
+
+    @idempotent
+    def post(self, request):
+        body = (request.data.get("body") or "").strip()
+        if not body:
+            raise DomainError("empty_message", "Write something before you send it.")
+        message = services.post_to_thread(
+            customer=request.user, sender=request.user, body=body, request=request
+        )
+        return Response(
+            MessageSerializer(message, context={"request": request}).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+
 class TransactionAction(APIView):
     """The customer's four buttons: I have paid, I received the money,
     I have not received the money, cancel.

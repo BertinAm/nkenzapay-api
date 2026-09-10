@@ -22,6 +22,7 @@ from nkenzapay.common.exceptions import (
     QuoteExpired,
 )
 from nkenzapay.common.money import display_amount
+from nkenzapay.common.text import clean_block
 from nkenzapay.notifications import services as notifications
 
 from .models import (
@@ -255,9 +256,17 @@ def seed_opening_messages(txn):
 
 
 @db_transaction.atomic
-def post_message(*, reference, sender, body, is_from_desk=False, request=None):
+def post_message(*, reference, sender, body, is_from_desk=False, request=None,
+                 allow_closed=False):
+    """One message against one transfer.
+
+    allow_closed is for the desk writing into a customer's thread when their
+    only transfer has closed. The customer's own chat stays read only on a
+    closed transfer -- that is what tells them it is finished -- but the desk
+    answering a question afterwards should not be refused.
+    """
     txn = _locked(reference)
-    if txn.chat_is_locked:
+    if txn.chat_is_locked and not allow_closed:
         raise ChatLocked()
 
     message = Message.objects.create(
@@ -265,7 +274,11 @@ def post_message(*, reference, sender, body, is_from_desk=False, request=None):
         sender=sender,
         is_from_desk=is_from_desk,
         kind=MessageKind.TEXT,
-        body=body.strip(),
+        # Line breaks kept, because somebody typed them; control characters
+        # dropped, because nobody did. A message is quoted into a notification
+        # email and read on the desk's screen, and neither wants a direction
+        # override in the middle of it.
+        body=clean_block(body, limit=4000),
     )
     _publish_message(txn, message)
 
@@ -277,6 +290,64 @@ def post_message(*, reference, sender, body, is_from_desk=False, request=None):
         notifications.notify_desk("admin.message_received", transaction=txn,
                                   context={"preview": preview})
     return message
+
+
+def customer_thread(customer):
+    """Every message this customer has exchanged with the desk, in order.
+
+    One conversation per person rather than one per order. Somebody who has
+    sent money three times has had one relationship with the desk, not three,
+    and answering them meant opening whichever transfer the question happened
+    to be attached to and hoping it was the right one.
+
+    Each message keeps the order it was written against, so the thread can say
+    which transfer a payment screenshot belongs to without the reader having to
+    remember. That is why this needs no new column: the link was always there,
+    it was only ever read one transfer at a time.
+    """
+    return (
+        Message.objects.filter(transaction__user=customer)
+        .select_related("sender", "transaction")
+        .prefetch_related("attachments")
+    )
+
+
+def open_thread_target(customer):
+    """The transfer a new message in the thread belongs against.
+
+    The one still running, most recent first, because that is what somebody is
+    almost always writing about. Failing that the last one they opened, so a
+    question after a transfer closes still lands somewhere its answer makes
+    sense.
+    """
+    return (
+        Transaction.objects.filter(user=customer)
+        .open()
+        .order_by("-created_at")
+        .first()
+        or Transaction.objects.filter(user=customer).order_by("-created_at").first()
+    )
+
+
+@db_transaction.atomic
+def post_to_thread(*, customer, sender, body, is_from_desk=False, request=None):
+    """Write into a customer's conversation rather than into one transfer.
+
+    A closed transfer's chat stays read only, so the target is chosen from what
+    is open. Somebody whose last transfer closed can still be written to, and
+    the message hangs off that transfer rather than vanishing.
+    """
+    target = open_thread_target(customer)
+    if target is None:
+        raise DomainError(
+            "no_thread",
+            "This customer has not opened a transfer yet, so there is nothing "
+            "to write against.",
+        )
+    return post_message(
+        reference=target.reference, sender=sender, body=body,
+        is_from_desk=is_from_desk, request=request, allow_closed=is_from_desk,
+    )
 
 
 @db_transaction.atomic
@@ -542,11 +613,19 @@ def _require_money_permission(user):
 
 
 def _publish_message(txn, message):
-    publish(f"transaction.{txn.reference}", "message.created", {
+    payload = {
         "id": message.pk,
         "kind": message.kind,
         "body": message.body,
         "is_from_desk": message.is_from_desk,
+        "reference": txn.reference,
         "created_at": message.created_at.isoformat(),
+    }
+    publish(f"transaction.{txn.reference}", "message.created", payload)
+    # And on the customer's own channel, because the conversation is theirs
+    # rather than any one transfer's: the desk watching a thread and the
+    # customer writing into it are not necessarily looking at the same order.
+    publish(f"customer.{txn.user_id}", "message.created", payload)
+    publish("admin.queue", "thread.updated", {
+        "reference": txn.reference, "customer": txn.user_id,
     })
-    publish("admin.queue", "thread.updated", {"reference": txn.reference})

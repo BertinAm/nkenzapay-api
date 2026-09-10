@@ -1,7 +1,7 @@
 from datetime import timedelta
 from decimal import Decimal
 
-from django.db.models import Avg, Count, OuterRef, Q, Subquery, Sum
+from django.db.models import Avg, Count, Max, OuterRef, Q, Subquery, Sum
 from django.db.models.functions import TruncDate
 from django.utils import timezone
 from rest_framework import generics, status
@@ -29,6 +29,7 @@ from nkenzapay.rates.models import RateProvider, RateSnapshot
 from nkenzapay.transactions import services as txn_services
 from nkenzapay.transactions.models import (
     CLOSED_STATUSES,
+    NEEDS_DESK_STATUSES,
     Attachment,
     Message,
     Status,
@@ -36,6 +37,7 @@ from nkenzapay.transactions.models import (
     Transaction,
 )
 from nkenzapay.transactions.serializers import (
+    AttachmentSerializer,
     MessageSerializer,
     TransactionDetailSerializer,
     money,
@@ -503,28 +505,218 @@ class AdminTransactionAction(APIView):
 
 
 class AdminInbox(APIView):
+    """The inbox, as people rather than transfers.
+
+    It used to be one row per transaction, so a customer who had sent money
+    three times appeared three times and answering them meant guessing which of
+    their rows the question was attached to. One row per person is both the
+    conversation the customer thinks they are having and, incidentally, what
+    makes finding somebody possible: a name, an email or a phone number is
+    something the desk knows, and a reference is something they have to look up.
+    """
+
     permission_classes = [IsDesk]
 
     def get(self, request):
-        threads = (
-            Transaction.objects.exclude(messages__isnull=True)
-            .select_related("user__profile", "send_currency", "receive_currency")
-            .prefetch_related("messages")
-            .order_by("-created_at")
+        people = (
+            User.objects.filter(transactions__messages__isnull=False)
+            .select_related("profile")
+            .annotate(
+                unread=Count(
+                    "transactions__messages",
+                    filter=Q(transactions__messages__read_at__isnull=True)
+                    & Q(transactions__messages__is_from_desk=False),
+                    distinct=True,
+                ),
+                last_at=Max("transactions__messages__created_at"),
+                open_orders=Count(
+                    "transactions",
+                    filter=~Q(transactions__status__in=CLOSED_STATUSES),
+                    distinct=True,
+                ),
+                waiting=Count(
+                    "transactions",
+                    filter=Q(transactions__status__in=NEEDS_DESK_STATUSES),
+                    distinct=True,
+                ),
+            )
+            .order_by("-last_at")
         )
+
+        search = (request.query_params.get("q") or "").strip()
+        if search:
+            # What the desk actually has in front of them when somebody gets in
+            # touch: a name off a payment screenshot, an address from an email,
+            # a number from WhatsApp. The reference is searchable too, for the
+            # times they do have one.
+            # first and last rather than legal_name: that one is a property
+            # built from the three name fields and there is no column to match
+            # against.
+            people = people.filter(
+                Q(email__icontains=search)
+                | Q(profile__first_name__icontains=search)
+                | Q(profile__middle_name__icontains=search)
+                | Q(profile__last_name__icontains=search)
+                | Q(profile__whatsapp_number__icontains=search)
+                | Q(transactions__reference__icontains=search)
+            ).distinct()
+
         wanted = request.query_params.get("filter")
         if wanted == "unread":
-            threads = threads.filter(messages__read_at__isnull=True,
-                                     messages__is_from_desk=False).distinct()
+            people = people.filter(unread__gt=0)
         elif wanted == "needs_desk":
-            threads = threads.needs_desk()
+            people = people.filter(waiting__gt=0)
+        elif wanted == "open":
+            people = people.filter(open_orders__gt=0)
+
         return Response({
-            "threads": ThreadSummarySerializer(threads[:50], many=True).data,
+            "threads": [_thread_row(person) for person in people[:60]],
             # Sent with the inbox rather than read from the settings endpoint,
             # which only accounts that can write settings may open. Someone
             # answering the chat all day is not necessarily one of them.
             "quick_replies": PlatformSetting.get("desk").get("quick_replies", []),
         })
+
+
+def _thread_row(person):
+    """One person's conversation, summarised for the list."""
+    latest = (
+        Message.objects.filter(transaction__user=person)
+        .select_related("transaction")
+        .order_by("-created_at", "-id")
+        .first()
+    )
+    profile = getattr(person, "profile", None)
+    return {
+        "customer_id": person.pk,
+        "name": person.display_name,
+        "initials": person.initials,
+        "email": person.email,
+        "whatsapp": profile.whatsapp_display if profile else "",
+        "photo_url": _photo_url(profile),
+        "unread": person.unread,
+        "open_orders": person.open_orders,
+        "waiting": person.waiting,
+        "last_at": person.last_at,
+        "preview": (latest.body or _kind_preview(latest))[:120] if latest else "",
+        "last_from_desk": latest.is_from_desk if latest else False,
+        # The transfer the newest message hangs off, so the row can link
+        # straight to the order somebody is asking about.
+        "reference": latest.transaction.reference if latest else None,
+    }
+
+
+def _kind_preview(message):
+    """What to show in the list for a message with no words of its own."""
+    return {
+        "attachment": "Sent a file",
+        "system_instructions": "Payment instructions",
+        "system_notice": "Notice",
+        "action": "Updated the transfer",
+    }.get(message.kind, "")
+
+
+class AdminCustomerThread(APIView):
+    """One customer's whole conversation, read and written by the desk."""
+
+    def get_permissions(self):
+        return [CanChat()] if self.request.method == "POST" else [IsDesk()]
+
+    def get(self, request, pk):
+        customer = generics.get_object_or_404(User, pk=pk)
+        messages = txn_services.customer_thread(customer)
+
+        # Reading it is what clears the badge. Inbound only: the desk's own
+        # messages were never unread to it.
+        Message.objects.filter(
+            transaction__user=customer, read_at__isnull=True, is_from_desk=False
+        ).update(read_at=timezone.now())
+
+        return Response({
+            "customer": {
+                "id": customer.pk,
+                "name": customer.display_name,
+                "initials": customer.initials,
+                "email": customer.email,
+                "photo_url": _photo_url(getattr(customer, "profile", None)),
+            },
+            "messages": MessageSerializer(
+                messages, many=True, context={"request": request}
+            ).data,
+        })
+
+    def post(self, request, pk):
+        customer = generics.get_object_or_404(User, pk=pk)
+        body = (request.data.get("body") or "").strip()
+        if not body:
+            raise DomainError("empty_message", "Write something before you send it.")
+        message = txn_services.post_to_thread(
+            customer=customer, sender=request.user, body=body,
+            is_from_desk=True, request=request,
+        )
+        return Response(MessageSerializer(message, context={"request": request}).data,
+                        status=status.HTTP_201_CREATED)
+
+
+class AdminThreadUploadUrl(APIView):
+    """Somewhere for the desk to put a file into a customer's conversation.
+
+    The desk sends things too: proof that a payout left, a screenshot of a
+    failed transfer, a form. Until now only the customer could attach anything,
+    so the desk described files in words and sent them over WhatsApp, which is
+    the one place this platform tells customers it will never contact them.
+    """
+
+    permission_classes = [CanChat]
+
+    def post(self, request, pk):
+        from nkenzapay.transactions.uploads import request_upload_url
+
+        customer = generics.get_object_or_404(User, pk=pk)
+        target = txn_services.open_thread_target(customer)
+        if target is None:
+            raise DomainError(
+                "no_thread",
+                "This customer has not opened a transfer yet, so there is "
+                "nothing to attach a file to.",
+            )
+        return Response(request_upload_url(
+            transaction=target,
+            user=request.user,
+            content_type=request.data.get("content_type", ""),
+            size_bytes=int(request.data.get("size_bytes") or 0),
+            filename=request.data.get("filename", ""),
+        ))
+
+
+class AdminThreadAttachment(APIView):
+    permission_classes = [CanChat]
+
+    def post(self, request, pk):
+        from nkenzapay.transactions.uploads import commit_upload
+
+        customer = generics.get_object_or_404(User, pk=pk)
+        target = txn_services.open_thread_target(customer)
+        if target is None:
+            raise DomainError("no_thread", "Nothing to attach a file to.")
+
+        attachment = commit_upload(
+            transaction=target,
+            user=request.user,
+            key=request.data.get("key", ""),
+            original_name=request.data.get("filename", ""),
+            content_type=request.data.get("content_type", ""),
+            size_bytes=int(request.data.get("size_bytes") or 0),
+            # The desk's own files are never payment proof: proof is what the
+            # customer sends to be verified, and a desk upload marked as proof
+            # would sit in the verification queue as if a customer had sent it.
+            is_payment_proof=False,
+            request=request,
+        )
+        return Response(
+            AttachmentSerializer(attachment, context={"request": request}).data,
+            status=status.HTTP_201_CREATED,
+        )
 
 
 class AdminReply(APIView):

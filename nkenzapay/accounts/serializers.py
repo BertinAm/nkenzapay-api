@@ -4,6 +4,7 @@ from django.contrib.auth import password_validation
 from django.utils import timezone
 from rest_framework import serializers
 
+from nkenzapay.common.text import clean_line
 from nkenzapay.geo.models import Country
 
 from .models import LoginActivity, Profile, User
@@ -71,6 +72,19 @@ class ProfileSerializer(serializers.ModelSerializer):
 
     def get_has_id_document(self, obj):
         return bool(obj.id_document_key)
+
+    # The three name fields, cleaned the same way. They are read off a payment
+    # screenshot by somebody deciding whether a document matches an account, so
+    # a zero-width character or a direction override in one of them is a
+    # decision made about text that is not what it appears to be.
+    def validate_first_name(self, value):
+        return clean_line(value, limit=80)
+
+    def validate_middle_name(self, value):
+        return clean_line(value, limit=80)
+
+    def validate_last_name(self, value):
+        return clean_line(value, limit=80)
 
     def validate_whatsapp_number(self, value):
         digits = PHONE_CLEAN.sub("", value or "")

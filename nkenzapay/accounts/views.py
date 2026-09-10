@@ -215,6 +215,50 @@ class ProfilePhotoCommitView(APIView):
         return Response(ProfileSerializer(profile, context={"request": request}).data)
 
 
+class MyPhotoView(APIView):
+    """The signed-in customer's own photograph, at a stable address.
+
+    Everything else in private storage is served through a link that expires in
+    a minute, which is right for a payment proof somebody is shown once. It is
+    wrong for an avatar: the picture is in the header of every screen, and a URL
+    that dies after sixty seconds turns into a broken image the moment somebody
+    leaves a tab open.
+
+    A fixed path is safe here because there is no secret in the path to leak --
+    it says "me". The session decides whose photograph that is, so the link is
+    worth nothing to anybody else who copies it.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        from django.http import Http404, HttpResponse
+
+        from nkenzapay.common.crypto import DecryptionError
+        from nkenzapay.common.storage import storage
+
+        profile = getattr(request.user, "profile", None)
+        if profile is None or not profile.photo_key:
+            raise Http404
+        try:
+            data = storage().read_bytes(profile.photo_key)
+        except (FileNotFoundError, OSError, DecryptionError) as exc:
+            raise Http404 from exc
+
+        content_type = "image/jpeg"
+        if profile.photo_key.endswith(".png"):
+            content_type = "image/png"
+        elif profile.photo_key.endswith(".webp"):
+            content_type = "image/webp"
+
+        response = HttpResponse(data, content_type=content_type)
+        # Cached by the browser that asked, and nowhere in between. A shared
+        # cache holding photographs of customers is the thing to avoid.
+        response["Cache-Control"] = "private, max-age=300"
+        response["X-Content-Type-Options"] = "nosniff"
+        return response
+
+
 class IdDocumentUploadUrlView(APIView):
     permission_classes = [IsAuthenticated]
     throttle_scope = "upload"
