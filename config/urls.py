@@ -1,4 +1,4 @@
-﻿from django.contrib import admin
+﻿from django.conf import settings
 from django.urls import include, path
 
 from nkenzapay.accounts.urls import auth_patterns, me_patterns
@@ -39,6 +39,23 @@ api_v1 = [
 ]
 
 urlpatterns = [
-    path("django-admin/", admin.site.urls),
     path("api/v1/", include((api_v1, "v1"))),
 ]
+
+# Django's own admin, in development only.
+#
+# It used to be routed unconditionally, which put a second way in beside the
+# desk's — and a weaker one. It takes an email and a password, where every desk
+# endpoint that moves money also demands TOTP. Worse, nothing was watching it:
+# failed sign-ins are recorded by the API login view, not by a signal, and the
+# throttles are DRF's, which Django's admin views never pass through. So it was
+# an unmetered, unlogged password prompt on the host that owns the database,
+# and the first URL any scanner tries.
+#
+# The desk runs on /api/v1/admin/ and has never needed this. Anything only
+# reachable here — corridors, currencies — belongs on the desk's own screens or
+# in a management command.
+if settings.DEBUG:
+    from django.contrib import admin
+
+    urlpatterns.append(path("django-admin/", admin.site.urls))

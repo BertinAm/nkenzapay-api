@@ -321,3 +321,65 @@ def test_an_audit_entry_cannot_be_edited(receive_order):
         entry.save()
     with pytest.raises(RuntimeError):
         entry.delete()
+
+
+# --- no second way in beside the desk's -----------------------------------
+
+
+def _urls_under(debug):
+    """config.urls as it is built with DEBUG set this way.
+
+    The route is decided at import time, and DEBUG is True while these tests
+    run, so asking the live URLconf would only report the developer's machine.
+    Reloading answers the question that matters: what does the deployed
+    configuration expose? Restored in the caller's finally.
+    """
+    import importlib
+
+    from django.test import override_settings
+    from django.urls import clear_url_caches
+
+    import config.urls
+
+    with override_settings(DEBUG=debug):
+        importlib.reload(config.urls)
+        clear_url_caches()
+    return config.urls
+
+
+def _restore_urls():
+    _urls_under(settings.DEBUG)
+
+
+def test_django_admin_is_not_routed_in_production():
+    """Django's own admin took an email and a password where every desk
+    endpoint that moves money also demands TOTP, and nothing watched it: failed
+    sign-ins are recorded by the API login view rather than by a signal, and
+    the throttles are DRF's, which admin views never reach."""
+    from django.urls import Resolver404, resolve
+
+    try:
+        urls = _urls_under(False)
+        with pytest.raises(Resolver404):
+            resolve("/django-admin/", urlconf=urls)
+        with pytest.raises(Resolver404):
+            resolve("/django-admin/login/", urlconf=urls)
+    finally:
+        _restore_urls()
+
+
+def test_the_api_is_still_routed_in_production():
+    """The other half of removing a route: everything else still answers."""
+    from django.urls import resolve
+
+    try:
+        urls = _urls_under(False)
+        for path in (
+            "/api/v1/auth/login",
+            "/api/v1/transactions",
+            "/api/v1/geo/corridors",
+            "/api/v1/admin/overview",
+        ):
+            assert resolve(path, urlconf=urls) is not None, path
+    finally:
+        _restore_urls()
